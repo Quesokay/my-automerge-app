@@ -1,189 +1,233 @@
-import { AutomergeUrl } from "@automerge/automerge-repo"
-import { useDocHandle, usePresence } from "@automerge/automerge-repo-react-hooks"
-import { useEffect, useRef } from "react"
-import { EditorState, Transaction, Plugin, PluginKey } from "prosemirror-state"
-import { EditorView, Decoration, DecorationSet } from "prosemirror-view"
-import { exampleSetup } from "prosemirror-example-setup"
-import { init, basicSchemaAdapter } from "@automerge/prosemirror"
-import "prosemirror-example-setup/style/style.css"
-import "prosemirror-menu/style/menu.css"
-import "prosemirror-view/style/prosemirror.css"
-import "./App.css"
+import { useState, useEffect, useRef } from 'react';
+import { 
+  Star, Share, MessageSquare, Video, Search, 
+  Undo, Redo, Printer, Bold, Italic, Underline, 
+  AlignLeft, AlignCenter, AlignRight, FileText
+} from 'lucide-react';
 
-interface CursorInfo {
-  pos: number
-  name: string
-  color: string
-}
+// ProseMirror Imports
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import { keymap } from 'prosemirror-keymap';
+import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
+import { history, undo, redo } from 'prosemirror-history';
+import { schema } from 'prosemirror-schema-basic';
 
-type PresenceState = {
-  cursor: CursorInfo
-}
+// Automerge Repo Imports
+import { AutomergeUrl } from "@automerge/automerge-repo";
+import { useDocHandle } from "@automerge/automerge-repo-react-hooks";
+import { init } from "@automerge/prosemirror";
 
-const cursorPluginKey = new PluginKey("remote-cursors")
+import './App.css';
 
-function getStableLocalUser() {
-  const storageKey = "automerge-prosemirror-cursor-user"
-  const palette = ["#ff5733", "#00b4d8", "#9b5de5", "#f15bb5", "#00f5d4"]
+const Header = () => (
+  <header className="docs-header">
+    <div className="header-brand">
+      <div className="docs-logo">
+        <FileText size={40} fill="#1a73e8" color="white" strokeWidth={1} />
+      </div>
+      <div className="header-meta">
+        <div className="doc-title-row">
+          <input type="text" className="doc-title-input" defaultValue="Untitled document" />
+          <Star size={16} className="text-muted cursor-pointer" />
+        </div>
+        <nav className="doc-menu">
+          {['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Help'].map(item => (
+            <button key={item} className="menu-btn">{item}</button>
+          ))}
+        </nav>
+      </div>
+    </div>
+    <div className="header-actions">
+      <button className="icon-btn"><MessageSquare size={18} /></button>
+      <button className="icon-btn"><Video size={18} /></button>
+      <button className="share-btn"><Share size={16} /> Share</button>
+      <div className="avatar">D</div>
+    </div>
+  </header>
+);
 
-  const saved = localStorage.getItem(storageKey)
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved) as { name: string; color: string }
-      if (parsed?.name && parsed?.color) {
-        return parsed
-      }
-    } catch {
-      // Ignore invalid storage values and generate a fresh identity.
+// Helper function to check if a specific mark (like bold/italic) is active at the cursor
+const isMarkActive = (state: EditorState | null, markType: any) => {
+  if (!state) return false;
+  const { from, $from, to, empty } = state.selection;
+  if (empty) {
+    return !!markType.isInSet(state.storedMarks || $from.marks());
+  }
+  return state.doc.rangeHasMark(from, to, markType);
+};
+
+// Toolbar now accepts BOTH view and editorState
+const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: EditorState | null }) => {
+  
+  const applyMark = (markType: any) => {
+    if (!view) return;
+    toggleMark(markType)(view.state, view.dispatch);
+    view.focus(); 
+  };
+
+  const handleBlockTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!view) return;
+    const val = e.target.value;
+    if (val === '0') {
+      setBlockType(schema.nodes.paragraph)(view.state, view.dispatch);
+    } else {
+      setBlockType(schema.nodes.heading, { level: parseInt(val) })(view.state, view.dispatch);
+    }
+    view.focus();
+  };
+
+  // Determine if our buttons should be highlighted
+  const boldActive = isMarkActive(editorState, schema.marks.strong);
+  const italicActive = isMarkActive(editorState, schema.marks.em);
+
+  // Determine current block type for the dropdown
+  let currentBlock = '0';
+  if (editorState) {
+    const { $from } = editorState.selection;
+    if ($from.parent.type.name === 'heading') {
+      currentBlock = $from.parent.attrs.level.toString();
     }
   }
 
-  const user = {
-    name: "User_" + Math.floor(Math.random() * 1000),
-    color: palette[Math.floor(Math.random() * palette.length)],
-  }
+  return (
+    <div className="docs-toolbar">
+      <div className="toolbar-group">
+        <button className="icon-btn"><Search size={16} /></button>
+        <button className="icon-btn" onClick={() => view && undo(view.state, view.dispatch)}><Undo size={16} /></button>
+        <button className="icon-btn" onClick={() => view && redo(view.state, view.dispatch)}><Redo size={16} /></button>
+        <button className="icon-btn"><Printer size={16} /></button>
+      </div>
+      <div className="toolbar-divider" />
+      <div className="toolbar-group">
+        {/* Wired up Dropdown */}
+        <select className="toolbar-select" value={currentBlock} onChange={handleBlockTypeChange}>
+          <option value="0">Normal text</option>
+          <option value="1">Heading 1</option>
+          <option value="2">Heading 2</option>
+          <option value="3">Heading 3</option>
+        </select>
+        <select className="toolbar-select"><option>Arial</option><option>Inter</option></select>
+      </div>
+      <div className="toolbar-divider" />
+      <div className="toolbar-group">
+        {/* Added dynamic .active classes based on state */}
+        <button 
+          className={`icon-btn ${boldActive ? 'active' : ''}`} 
+          onClick={() => applyMark(schema.marks.strong)}
+        >
+          <Bold size={16} />
+        </button>
+        <button 
+          className={`icon-btn ${italicActive ? 'active' : ''}`} 
+          onClick={() => applyMark(schema.marks.em)}
+        >
+          <Italic size={16} />
+        </button>
+        <button className="icon-btn"><Underline size={16} /></button>
+      </div>
+      <div className="toolbar-divider" />
+      <div className="toolbar-group">
+        <button className="icon-btn"><AlignLeft size={16} /></button>
+        <button className="icon-btn"><AlignCenter size={16} /></button>
+        <button className="icon-btn"><AlignRight size={16} /></button>
+      </div>
+    </div>
+  );
+};
 
-  localStorage.setItem(storageKey, JSON.stringify(user))
-  return user
-}
+const Sidebar = () => (
+  <aside className="docs-sidebar">
+    <div className="sidebar-header">
+      <span className="font-semibold">Document outline</span>
+    </div>
+    <div className="sidebar-content text-muted text-sm">
+      Headings you add to the document will appear here.
+    </div>
+  </aside>
+);
 
-function createCursorWidget(name: string, color: string) {
-  const dom = document.createElement("span")
-  dom.className = "remote-cursor-container"
-
-  const cursorBar = document.createElement("span")
-  cursorBar.className = "remote-cursor-bar"
-  cursorBar.style.borderLeftColor = color
-
-  const label = document.createElement("span")
-  label.className = "remote-cursor-label"
-  label.style.backgroundColor = color
-  label.innerText = name
-
-  dom.appendChild(cursorBar)
-  dom.appendChild(label)
-  return dom
-}
-
-function createCursorPlugin(
-  updatePresence: (channel: "cursor", value: CursorInfo) => void,
-  localUser: { name: string; color: string }
-) {
-  return new Plugin({
-    key: cursorPluginKey,
-    state: {
-      init() {
-        return DecorationSet.empty
-      },
-      apply(tr, set, _oldState, newState) {
-        // Keeps cursors tied to text changes
-        set = set.map(tr.mapping, tr.doc)
-
-        const meta = tr.getMeta(cursorPluginKey)
-        if (meta) {
-          const decorations: Decoration[] = []
-          Object.entries(meta as Record<string, CursorInfo>).forEach(([_, cursor]) => {
-            if (cursor.pos <= newState.doc.content.size) {
-              decorations.push(
-                Decoration.widget(cursor.pos, createCursorWidget(cursor.name, cursor.color))
-              )
-            }
-          })
-          return DecorationSet.create(newState.doc, decorations)
-        }
-        return set
-      },
-    },
-    props: {
-      decorations(state) {
-        return this.getState(state)
-      },
-    },
-    view() {
-      return {
-        update(view, lastState) {
-          const { selection } = view.state
-          if (lastState && lastState.selection.eq(selection)) return
-
-          updatePresence("cursor", {
-            pos: selection.head,
-            name: localUser.name,
-            color: localUser.color,
-          })
-        },
-      }
-    },
-  })
-}
-
-function App({ docUrl }: { docUrl: AutomergeUrl }) {
-  const editorRoot = useRef<HTMLDivElement>(null)
-  const handle = useDocHandle<{ text: string }>(docUrl)
-  const viewRef = useRef<EditorView | null>(null)
-
-  // Stable identity for the current browser profile
-  const localUser = useRef(getStableLocalUser())
-
-  const { peerStates, update } = usePresence<PresenceState>({
-    handle: handle!,
-    initialState: {
-      cursor: {
-        pos: 0,
-        name: localUser.current.name,
-        color: localUser.current.color,
-      },
-    },
-  })
-
-  // Watch for presence updates and safely push them into the editor state
-  useEffect(() => {
-    if (!viewRef.current) return
-
-    const remoteCursors: Record<string, CursorInfo> = {}
-    Object.entries(peerStates.value).forEach(([peerId, peerState]) => {
-      const cursor = peerState.value.cursor
-      if (cursor) {
-        remoteCursors[peerId] = cursor
-      }
-    })
-
-    const tr = viewRef.current.state.tr.setMeta(cursorPluginKey, remoteCursors)
-    viewRef.current.dispatch(tr)
-  }, [peerStates])
+const ProseMirrorEditor = ({ 
+  docUrl, 
+  onViewCreated,
+  onStateChange // New prop to notify React when PM updates
+}: { 
+  docUrl: AutomergeUrl;
+  onViewCreated: (view: EditorView | null) => void;
+  onStateChange: (state: EditorState) => void;
+}) => {
+  const editorRoot = useRef<HTMLDivElement>(null);
+  const handle = useDocHandle<{ text: string }>(docUrl);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    let view: EditorView
-
-    if (editorRoot.current != null && handle != null) {
-      const { pmDoc, schema, plugin } = init(handle, ["text"], {
-        schemaAdapter: basicSchemaAdapter,
-      })
-
-      const liveCursorPlugin = createCursorPlugin(update, localUser.current)
-
-      view = new EditorView(editorRoot.current, {
-        state: EditorState.create({
-          schema,
-          plugins: [...exampleSetup({ schema }), plugin, liveCursorPlugin],
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          doc: pmDoc,
-        }),
-        dispatchTransaction: (tx: Transaction) => {
-          view!.updateState(view.state.apply(tx))
-        },
-      })
-
-      viewRef.current = view
+    if (handle) {
+      handle.whenReady().then(() => {
+        if (handle.docSync() != null) setLoaded(true);
+      });
     }
+  }, [handle]);
+
+  useEffect(() => {
+    if (!editorRoot.current || !loaded || !handle) return;
+
+    const { pmDoc, schema, plugin } = init(handle, ["text"]);
+
+    const state = EditorState.create({
+      schema,
+      doc: pmDoc,
+      plugins: [
+        history(),
+        keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
+        keymap(baseKeymap),
+        plugin 
+      ]
+    });
+
+    const view = new EditorView(editorRoot.current, { 
+      state,
+      // Intercept transactions to keep React synced with ProseMirror
+      dispatchTransaction(transaction) {
+        const newState = view.state.apply(transaction);
+        view.updateState(newState);
+        onStateChange(newState);
+      }
+    });
+    
+    onViewCreated(view);
+    onStateChange(state); // Set initial state
+
     return () => {
-      if (view != null) {
-        view.destroy()
-        viewRef.current = null
-      }
-    }
-  }, [editorRoot, handle])
+      onViewCreated(null);
+      view.destroy();
+    };
+  }, [loaded, handle, onViewCreated, onStateChange]);
 
-  return <div id="editor" ref={editorRoot}></div>
+  return <div ref={editorRoot} className="prosemirror-mount" />;
+};
+
+export default function App({ docUrl }: { docUrl: AutomergeUrl }) {
+  const [sidebarOpen] = useState(true);
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [editorState, setEditorState] = useState<EditorState | null>(null); // New state
+
+  return (
+    <div className="app-container">
+      <Header />
+      {/* Pass both view and state down */}
+      <Toolbar view={editorView} editorState={editorState} />
+      <main className="main-workspace">
+        {sidebarOpen && <Sidebar />}
+        <section className="editor-container">
+          <div className="document-page">
+            <ProseMirrorEditor 
+              docUrl={docUrl} 
+              onViewCreated={setEditorView}
+              onStateChange={setEditorState} // Link the callback
+            />
+          </div>
+        </section>
+      </main>
+    </div>
+  );
 }
-
-export default App
