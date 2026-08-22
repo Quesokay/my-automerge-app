@@ -11,7 +11,6 @@ import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
-import { Schema, Mark } from 'prosemirror-model';
 
 
 // Automerge Repo Imports
@@ -74,7 +73,7 @@ const Toolbar = ({
   const activeSchema = editorState?.schema;
 
   const applyMark = (markName: string) => {
-    if (!view || !activeSchema) return;
+    if (!view || !activeSchema || !activeSchema.marks[markName]) return;
     toggleMark(activeSchema.marks[markName])(view.state, view.dispatch);
     view.focus(); 
   };
@@ -90,48 +89,14 @@ const Toolbar = ({
     view.focus();
   };
 
-  const boldActive = activeSchema ? isMarkActive(editorState, activeSchema.marks.strong) : false;
-  const italicActive = activeSchema ? isMarkActive(editorState, activeSchema.marks.em) : false;
+  const boldActive = activeSchema && activeSchema.marks.strong ? isMarkActive(editorState, activeSchema.marks.strong) : false;
+  const italicActive = activeSchema && activeSchema.marks.em ? isMarkActive(editorState, activeSchema.marks.em) : false;
 
   let currentBlock = '0';
   if (editorState && activeSchema) {
     const { $from } = editorState.selection;
     if ($from.parent.type.name === 'heading') currentBlock = $from.parent.attrs.level.toString();
   }
-
-  // --- Safely check font marks ---
-  let currentFont = "Arial";
-  if (editorState && activeSchema && activeSchema.marks.font) {
-    const { $from, empty } = editorState.selection;
-    // Safely cast and check for TextSelection to access $cursor
-    const $cursor = editorState.selection instanceof TextSelection ? editorState.selection.$cursor : null;
-    
-    const marks = empty && $cursor ? editorState.storedMarks || $cursor.marks() : $from.marks();
-    // Explicitly type 'm' as Mark
-    const fontMark = marks.find((m: Mark) => m.type.name === 'font');
-    if (fontMark) currentFont = fontMark.attrs.family;
-  }
-
-  const handleFontChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const fontName = e.target.value;
-    if (!view || !activeSchema || !activeSchema.marks.font) return;
-    
-    const markType = activeSchema.marks.font;
-    const { empty, ranges } = view.state.selection;
-    const $cursor = view.state.selection instanceof TextSelection ? view.state.selection.$cursor : null;
-    const tr = view.state.tr;
-
-    if (empty && $cursor) {
-      tr.addStoredMark(markType.create({ family: fontName }));
-    } else {
-      ranges.forEach(({ $from, $to }) => {
-        tr.removeMark($from.pos, $to.pos, markType); 
-        tr.addMark($from.pos, $to.pos, markType.create({ family: fontName }));
-      });
-    }
-    view.dispatch(tr);
-    view.focus();
-  };
 
   return (
     <div className="docs-toolbar">
@@ -150,11 +115,9 @@ const Toolbar = ({
           <option value="2">Heading 2</option>
           <option value="3">Heading 3</option>
         </select>
-        <select className="toolbar-select" value={currentFont} onChange={handleFontChange}>
+        {/* Font dropdown mocked visually for now to prevent sync crashes */}
+        <select className="toolbar-select">
           <option value="Arial">Arial</option>
-          <option value="Inter">Inter</option>
-          <option value="Times New Roman">Times New Roman</option>
-          <option value="Courier New">Courier New</option>
         </select>
       </div>
       <div className="toolbar-divider" />
@@ -312,25 +275,13 @@ const ProseMirrorEditor = ({
 
   useEffect(() => {
     if (!editorRoot.current || !loaded || !handle) return;
-    const { pmDoc, schema: amSchema, plugin } = init(handle, ["text"]);
-
-    const customSchema = new Schema({
-    nodes: amSchema.spec.nodes,
-    marks: amSchema.spec.marks.append({
-      font: {
-        attrs: { family: { default: 'Arial' } },
-        parseDOM: [{ style: 'font-family', getAttrs: value => ({ family: value }) }],
-        toDOM: mark => ['span', { style: `font-family: ${mark.attrs.family}` }, 0]
-      }
-    })
-  });
-
-  // 2. Re-parse the document safely into the new schema
-  const customPmDoc = customSchema.nodeFromJSON(pmDoc.toJSON());
+    
+    // FIX: Use the pure schema and document provided by Automerge
+    const { pmDoc, schema, plugin } = init(handle, ["text"]);
 
     const state = EditorState.create({
-      schema: customSchema, // Use our extended schema
-      doc: customPmDoc,
+      schema,
+      doc: pmDoc,
       plugins: [
         history(),
         keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
@@ -347,7 +298,6 @@ const ProseMirrorEditor = ({
         view.updateState(newState);
         onStateChange(newState);
 
-        // FEATURE 3: Send both head and anchor for highlights
         if (transaction.selectionSet) {
           handle.broadcast({
             type: 'cursor',
