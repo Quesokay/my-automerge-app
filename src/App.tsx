@@ -6,8 +6,8 @@ import {
 } from 'lucide-react';
 
 // ProseMirror Imports
-import { EditorState } from 'prosemirror-state';
-import { EditorView } from 'prosemirror-view';
+import { EditorState, Plugin, PluginKey } from 'prosemirror-state';
+import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
@@ -47,19 +47,14 @@ const Header = () => (
   </header>
 );
 
-// Helper function to check if a specific mark (like bold/italic) is active at the cursor
 const isMarkActive = (state: EditorState | null, markType: any) => {
   if (!state) return false;
   const { from, $from, to, empty } = state.selection;
-  if (empty) {
-    return !!markType.isInSet(state.storedMarks || $from.marks());
-  }
+  if (empty) return !!markType.isInSet(state.storedMarks || $from.marks());
   return state.doc.rangeHasMark(from, to, markType);
 };
 
-// Toolbar now accepts BOTH view and editorState
 const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: EditorState | null }) => {
-  
   const applyMark = (markType: any) => {
     if (!view) return;
     toggleMark(markType)(view.state, view.dispatch);
@@ -77,17 +72,13 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
     view.focus();
   };
 
-  // Determine if our buttons should be highlighted
   const boldActive = isMarkActive(editorState, schema.marks.strong);
   const italicActive = isMarkActive(editorState, schema.marks.em);
 
-  // Determine current block type for the dropdown
   let currentBlock = '0';
   if (editorState) {
     const { $from } = editorState.selection;
-    if ($from.parent.type.name === 'heading') {
-      currentBlock = $from.parent.attrs.level.toString();
-    }
+    if ($from.parent.type.name === 'heading') currentBlock = $from.parent.attrs.level.toString();
   }
 
   return (
@@ -100,7 +91,6 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
       </div>
       <div className="toolbar-divider" />
       <div className="toolbar-group">
-        {/* Wired up Dropdown */}
         <select className="toolbar-select" value={currentBlock} onChange={handleBlockTypeChange}>
           <option value="0">Normal text</option>
           <option value="1">Heading 1</option>
@@ -111,19 +101,8 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
       </div>
       <div className="toolbar-divider" />
       <div className="toolbar-group">
-        {/* Added dynamic .active classes based on state */}
-        <button 
-          className={`icon-btn ${boldActive ? 'active' : ''}`} 
-          onClick={() => applyMark(schema.marks.strong)}
-        >
-          <Bold size={16} />
-        </button>
-        <button 
-          className={`icon-btn ${italicActive ? 'active' : ''}`} 
-          onClick={() => applyMark(schema.marks.em)}
-        >
-          <Italic size={16} />
-        </button>
+        <button className={`icon-btn ${boldActive ? 'active' : ''}`} onClick={() => applyMark(schema.marks.strong)}><Bold size={16} /></button>
+        <button className={`icon-btn ${italicActive ? 'active' : ''}`} onClick={() => applyMark(schema.marks.em)}><Italic size={16} /></button>
         <button className="icon-btn"><Underline size={16} /></button>
       </div>
       <div className="toolbar-divider" />
@@ -147,10 +126,56 @@ const Sidebar = () => (
   </aside>
 );
 
+// --- 1. Define the Cursor Plugin ---
+const cursorPluginKey = new PluginKey('cursors');
+
+const cursorPlugin = () => new Plugin({
+  key: cursorPluginKey,
+  state: {
+    init() { return { cursors: {} }; },
+    apply(tr, pluginState) {
+      const meta = tr.getMeta(cursorPluginKey);
+      let { cursors } = pluginState;
+      
+      // If we receive a cursor update, merge it into our state
+      if (meta) {
+        cursors = { ...cursors, [meta.clientId]: meta };
+      }
+      return { cursors };
+    }
+  },
+  props: {
+    // This physically draws the HTML elements onto the ProseMirror canvas
+    decorations(state) {
+      const { cursors } = cursorPluginKey.getState(state);
+      const decos: Decoration[] = [];
+      
+      Object.values(cursors).forEach((c: any) => {
+        // Prevent crashing if a remote cursor index is temporarily out of bounds during a sync
+        const safePos = Math.max(0, Math.min(c.pos, state.doc.content.size));
+        
+        const widget = document.createElement('span');
+        widget.className = 'remote-cursor';
+        widget.style.borderLeftColor = c.color;
+        
+        const flag = document.createElement('span');
+        flag.className = 'remote-cursor-flag';
+        flag.style.backgroundColor = c.color;
+        flag.innerText = c.name;
+        
+        widget.appendChild(flag);
+        decos.push(Decoration.widget(safePos, widget, { side: 1 }));
+      });
+      
+      return DecorationSet.create(state.doc, decos);
+    }
+  }
+});
+
 const ProseMirrorEditor = ({ 
   docUrl, 
   onViewCreated,
-  onStateChange // New prop to notify React when PM updates
+  onStateChange
 }: { 
   docUrl: AutomergeUrl;
   onViewCreated: (view: EditorView | null) => void;
@@ -159,6 +184,11 @@ const ProseMirrorEditor = ({
   const editorRoot = useRef<HTMLDivElement>(null);
   const handle = useDocHandle<{ text: string }>(docUrl);
   const [loaded, setLoaded] = useState(false);
+
+  // Generate random identity for this session
+  const myClientId = useRef(Math.random().toString(36).substr(2, 9)).current;
+  const myColor = useRef(['#ff5722', '#4caf50', '#2196f3', '#e91e63', '#9c27b0'][Math.floor(Math.random() * 5)]).current;
+  const myName = useRef(`User ${Math.floor(Math.random() * 1000)}`).current;
 
   useEffect(() => {
     if (handle) {
@@ -180,24 +210,48 @@ const ProseMirrorEditor = ({
         history(),
         keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
         keymap(baseKeymap),
-        plugin 
+        plugin,
+        cursorPlugin() // Inject the cursor plugin
       ]
     });
 
     const view = new EditorView(editorRoot.current, { 
       state,
-      // Intercept transactions to keep React synced with ProseMirror
       dispatchTransaction(transaction) {
         const newState = view.state.apply(transaction);
         view.updateState(newState);
         onStateChange(newState);
+
+        // --- 2. Broadcast cursor when our selection changes ---
+        if (transaction.selectionSet) {
+          handle.broadcast({
+            type: 'cursor',
+            clientId: myClientId,
+            pos: newState.selection.head,
+            name: myName,
+            color: myColor
+          });
+        }
       }
     });
+
+    // --- 3. Listen for incoming cursors from other users ---
+    const onMessage = (msg: any) => {
+      const data = msg.message; 
+      if (data && data.type === 'cursor' && data.clientId !== myClientId) {
+        // Dispatch an empty transaction purely to update the cursor plugin state
+        const tr = view.state.tr.setMeta(cursorPluginKey, data);
+        view.dispatch(tr);
+      }
+    };
+    
+    handle.on("ephemeral-message", onMessage);
     
     onViewCreated(view);
-    onStateChange(state); // Set initial state
+    onStateChange(state);
 
     return () => {
+      handle.off("ephemeral-message", onMessage);
       onViewCreated(null);
       view.destroy();
     };
@@ -209,12 +263,11 @@ const ProseMirrorEditor = ({
 export default function App({ docUrl }: { docUrl: AutomergeUrl }) {
   const [sidebarOpen] = useState(true);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
-  const [editorState, setEditorState] = useState<EditorState | null>(null); // New state
+  const [editorState, setEditorState] = useState<EditorState | null>(null);
 
   return (
     <div className="app-container">
       <Header />
-      {/* Pass both view and state down */}
       <Toolbar view={editorView} editorState={editorState} />
       <main className="main-workspace">
         {sidebarOpen && <Sidebar />}
@@ -223,7 +276,7 @@ export default function App({ docUrl }: { docUrl: AutomergeUrl }) {
             <ProseMirrorEditor 
               docUrl={docUrl} 
               onViewCreated={setEditorView}
-              onStateChange={setEditorState} // Link the callback
+              onStateChange={setEditorState}
             />
           </div>
         </section>
