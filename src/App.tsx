@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { useHash } from "react-use";
 import { 
   Star, Share, MessageSquare, Video, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
-  AlignLeft, AlignCenter, AlignRight, FileText
+  AlignLeft, AlignCenter, AlignRight, FileText, Send
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -13,33 +12,33 @@ import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 
-import {  RootDocument } from "./rootDoc";
-
 // Automerge Repo Imports
 import { AutomergeUrl, isValidAutomergeUrl } from "@automerge/automerge-repo";
-import { useDocHandle, useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
+import { useRepo, useDocument, useDocHandle } from "@automerge/automerge-repo-react-hooks";
 import { init } from "@automerge/prosemirror";
+import { useHash } from "react-use";
+import { RootDocument } from "./rootDoc";
 
 import './App.css';
 
+// --- Updated Header with Chat Toggle ---
 const Header = ({ 
   title, 
-  onTitleChange 
+  onTitleChange, 
+  onToggleChat, 
+  chatOpen 
 }: { 
-  title: string, 
-  onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void 
+  title: string; 
+  onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onToggleChat: () => void;
+  chatOpen: boolean;
 }) => {
-  // 1. State to track if the link was just copied
   const [copied, setCopied] = useState(false);
 
-  // 2. Handler to copy the current URL to the clipboard
   const handleShareClick = () => {
     navigator.clipboard.writeText(window.location.href).then(() => {
       setCopied(true);
-      // Revert the button text back to "Share" after 2 seconds
       setTimeout(() => setCopied(false), 2000); 
-    }).catch(err => {
-      console.error("Failed to copy URL: ", err);
     });
   };
 
@@ -68,14 +67,14 @@ const Header = ({
         </div>
       </div>
       <div className="header-actions">
-        <button className="icon-btn"><MessageSquare size={18} /></button>
+        {/* Chat toggle button */}
+        <button className={`icon-btn ${chatOpen ? 'active' : ''}`} onClick={onToggleChat} title="Toggle Chat">
+          <MessageSquare size={18} />
+        </button>
         <button className="icon-btn"><Video size={18} /></button>
-        
-        {/* 3. Wire up the Share button */}
         <button className="share-btn" onClick={handleShareClick}>
           <Share size={16} /> {copied ? "Copied!" : "Share"}
         </button>
-        
         <div className="avatar">D</div>
       </div>
     </header>
@@ -89,14 +88,7 @@ const isMarkActive = (state: EditorState | null, markType: any) => {
   return state.doc.rangeHasMark(from, to, markType);
 };
 
-const Toolbar = ({ 
-  view, 
-  editorState 
-}: { 
-  view: EditorView | null; 
-  editorState: EditorState | null;
-}) => {
-  
+const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: EditorState | null }) => {
   const activeSchema = editorState?.schema;
 
   const applyMark = (markName: string) => {
@@ -134,7 +126,6 @@ const Toolbar = ({
         <button className="icon-btn"><Printer size={16} /></button>
       </div>
       <div className="toolbar-divider" />
-      
       <div className="toolbar-group">
         <select className="toolbar-select" value={currentBlock} onChange={handleBlockTypeChange}>
           <option value="0">Normal text</option>
@@ -142,10 +133,7 @@ const Toolbar = ({
           <option value="2">Heading 2</option>
           <option value="3">Heading 3</option>
         </select>
-        {/* Font dropdown mocked visually for now to prevent sync crashes */}
-        <select className="toolbar-select">
-          <option value="Arial">Arial</option>
-        </select>
+        <select className="toolbar-select"><option value="Arial">Arial</option></select>
       </div>
       <div className="toolbar-divider" />
       <div className="toolbar-group">
@@ -163,7 +151,80 @@ const Toolbar = ({
   );
 };
 
-// Helper to fetch the title for items in the sidebar
+// --- PushPin Chat Thread Component ---
+type ChatMessage = {
+  id: string;
+  author: string;
+  text: string;
+  timestamp: number;
+};
+
+const ChatDrawer = ({ docUrl }: { docUrl: AutomergeUrl }) => {
+  const [doc, changeDoc] = useDocument<{ messages?: ChatMessage[] }>(docUrl);
+  const [inputVal, setInputVal] = useState('');
+  
+  // Stable random user identity for chat messages
+  const myName = useRef(`User ${Math.floor(Math.random() * 1000)}`).current;
+
+  const messages = doc?.messages || [];
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputVal.trim()) return;
+
+    const newMessage: ChatMessage = {
+      id: Math.random().toString(36).substring(2, 9),
+      author: myName,
+      text: inputVal.trim(),
+      timestamp: Date.now(),
+    };
+
+    changeDoc((d) => {
+      if (!d.messages) d.messages = [];
+      d.messages.push(newMessage);
+    });
+
+    setInputVal('');
+  };
+
+  return (
+    <aside className="chat-drawer">
+      <div className="chat-header">
+        <span className="font-semibold">Document Discussion</span>
+      </div>
+      <div className="chat-messages">
+        {messages.length === 0 ? (
+          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>
+            No comments yet. Start the conversation!
+          </div>
+        ) : (
+          messages.map((msg) => (
+            <div key={msg.id} className="chat-bubble">
+              <div className="chat-meta">
+                <span className="chat-author">{msg.author}</span>
+                <span className="chat-time">
+                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+              <div className="chat-text">{msg.text}</div>
+            </div>
+          ))
+        )}
+      </div>
+      <form onSubmit={handleSendMessage} className="chat-input-row">
+        <input 
+          type="text" 
+          className="chat-input" 
+          placeholder="Add a comment..." 
+          value={inputVal}
+          onChange={(e) => setInputVal(e.target.value)}
+        />
+        <button type="submit" className="icon-btn chat-send-btn"><Send size={14} /></button>
+      </form>
+    </aside>
+  );
+};
+
 const DocumentTitle = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   const [doc] = useDocument<{ title?: string }>(docUrl);
   return <span>{doc?.title || "Untitled document"}</span>;
@@ -180,15 +241,11 @@ const Sidebar = ({
 }) => {
   const repo = useRepo();
   const [rootDoc, changeRootDoc] = useDocument<RootDocument>(rootDocUrl);
-
-  // Safely fallback to an empty array if rootDoc or documents is not yet defined
   const documents = rootDoc?.documents || [];
 
-  // If a user opens a shared link, automatically save it to their root document
   useEffect(() => {
     if (selectedDocUrl) {
       changeRootDoc((d) => {
-        // Ensure d.documents is initialized
         if (!d.documents) d.documents = [];
         if (!d.documents.includes(selectedDocUrl)) {
           d.documents.push(selectedDocUrl);
@@ -198,7 +255,7 @@ const Sidebar = ({
   }, [selectedDocUrl, changeRootDoc]);
 
   const handleNewDocument = () => {
-    const newDoc = repo.create({ text: "", title: "Untitled document" });
+    const newDoc = repo.create({ text: "", title: "Untitled document", messages: [] });
     changeRootDoc(d => {
       if (!d.documents) d.documents = [];
       d.documents.push(newDoc.url);
@@ -251,22 +308,17 @@ const cursorPlugin = () => new Plugin({
       const docSize = state.doc.content.size;
       
       Object.values(cursors).forEach((c: any) => {
-        // --- FEATURE 3: Remote Selection Highlighting ---
-        // Ensure boundaries don't crash ProseMirror if doc sizes are briefly out of sync
         const safeHead = Math.max(0, Math.min(c.head, docSize));
         const safeAnchor = Math.max(0, Math.min(c.anchor, docSize));
         
-        // If the user has highlighted text, draw a background color over it
         if (safeHead !== safeAnchor) {
           const from = Math.min(safeHead, safeAnchor);
           const to = Math.max(safeHead, safeAnchor);
           decos.push(Decoration.inline(from, to, {
-            // Append '40' to hex color for ~25% opacity highlight
             style: `background-color: ${c.color}40;` 
           }));
         }
         
-        // Draw the standard cursor caret at the 'head' (where their mouse is)
         const widget = document.createElement('span');
         widget.className = 'remote-cursor';
         widget.style.borderLeftColor = c.color;
@@ -285,6 +337,7 @@ const cursorPlugin = () => new Plugin({
   }
 });
 
+
 const ProseMirrorEditor = ({ 
   docUrl, 
   onViewCreated,
@@ -295,6 +348,8 @@ const ProseMirrorEditor = ({
   onStateChange: (state: EditorState) => void;
 }) => {
   const editorRoot = useRef<HTMLDivElement>(null);
+  
+  // Use useDocHandle which correctly manages the async handle lifecycle
   const handle = useDocHandle<{ text: string }>(docUrl);
   const [loaded, setLoaded] = useState(false);
 
@@ -305,15 +360,13 @@ const ProseMirrorEditor = ({
   useEffect(() => {
     if (handle) {
       handle.whenReady().then(() => {
-        if (handle.doc() != null) setLoaded(true);
+        if (handle.docSync() != null) setLoaded(true);
       });
     }
   }, [handle]);
 
   useEffect(() => {
     if (!editorRoot.current || !loaded || !handle) return;
-    
-    // FIX: Use the pure schema and document provided by Automerge
     const { pmDoc, schema, plugin } = init(handle, ["text"]);
 
     const state = EditorState.create({
@@ -370,11 +423,12 @@ const ProseMirrorEditor = ({
   return <div ref={editorRoot} className="prosemirror-mount" />;
 };
 
+
 export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   
-  // URL Hash routing to manage the active document
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
@@ -390,7 +444,12 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
 
   return (
     <div className="app-container">
-      <Header title={title} onTitleChange={handleTitleChange} />
+      <Header 
+        title={title} 
+        onTitleChange={handleTitleChange} 
+        onToggleChat={() => setChatOpen(!chatOpen)} 
+        chatOpen={chatOpen}
+      />
       <Toolbar view={editorView} editorState={editorState} />
       <main className="main-workspace">
         <Sidebar 
@@ -402,7 +461,7 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
           <div className="document-page">
             {selectedDocUrl ? (
               <ProseMirrorEditor 
-                key={selectedDocUrl} // Force remount on doc change
+                key={selectedDocUrl} 
                 docUrl={selectedDocUrl} 
                 onViewCreated={setEditorView}
                 onStateChange={setEditorState}
@@ -414,6 +473,8 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
             )}
           </div>
         </section>
+        {/* Render chat drawer if a document is selected and chat is toggled open */}
+        {selectedDocUrl && chatOpen && <ChatDrawer docUrl={selectedDocUrl} />}
       </main>
     </div>
   );
