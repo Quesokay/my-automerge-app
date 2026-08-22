@@ -206,3 +206,49 @@ body {
 .remote-cursor:hover .remote-cursor-flag {
   opacity: 1;
 }
+
+/* --- Sidebar Outline Styles --- */
+.outline-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.outline-item {
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #444746;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-item:hover {
+  background-color: var(--hover-bg);
+  color: #1a73e8; /* Highlights blue on hover like Docs */
+}
+
+/* --- ProseMirror Typography Restores --- */
+.ProseMirror h1 {
+  font-size: 24pt;
+  font-weight: normal;
+  margin-top: 0;
+  margin-bottom: 8pt;
+}
+
+.ProseMirror h2 {
+  font-size: 18pt;
+  font-weight: normal;
+  margin-top: 0;
+  margin-bottom: 6pt;
+}
+
+.ProseMirror h3 {
+  font-size: 14pt;
+  font-weight: normal;
+  margin-top: 0;
+  margin-bottom: 4pt;
+}
