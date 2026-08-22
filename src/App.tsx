@@ -25,29 +25,48 @@ import './App.css';
 
 const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   const handle = useDocHandle(docUrl);
-  const [peers, setPeers] = useState<string[]>([]);
+  const [peerStatuses, setPeerStatuses] = useState<Record<string, boolean>>({});
   const [isOnline, setIsOnline] = useState(true);
+
+  // Generate a stable client ID for this session
+  const myClientId = useRef(Math.random().toString(36).substr(2, 9)).current;
 
   useEffect(() => {
     if (!handle) return;
-    const updatePeers = (msg: any) => {
-      if (msg && msg.senderId) {
-        setPeers(prev => Array.from(new Set([...prev, msg.senderId])));
+
+    const onMessage = (msg: any) => {
+      const data = msg.message;
+      // Listen for presence broadcast packets
+      if (data && data.type === 'presence' && data.clientId !== myClientId) {
+        setPeerStatuses(prev => ({
+          ...prev,
+          [data.clientId]: data.isOnline
+        }));
       }
     };
-    handle.on("ephemeral-message", updatePeers);
+
+    handle.on("ephemeral-message", onMessage);
     return () => {
-      handle.off("ephemeral-message", updatePeers);
+      handle.off("ephemeral-message", onMessage);
     };
-  }, [handle]);
+  }, [handle, myClientId]);
 
   const toggleConnection = () => {
-    if (isOnline) {
-      goOffline();
-      setIsOnline(false);
-    } else {
+    const nextState = !isOnline;
+    if (nextState) {
       goOnline();
-      setIsOnline(true);
+    } else {
+      goOffline();
+    }
+    setIsOnline(nextState);
+
+    // Broadcast our new connection state to all peers
+    if (handle) {
+      handle.broadcast({
+        type: 'presence',
+        clientId: myClientId,
+        isOnline: nextState
+      });
     }
   };
 
@@ -65,9 +84,23 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
       <div className="friend-avatars">
         <span className="text-muted text-sm" style={{ marginRight: '6px' }}>Active:</span>
         <div className="avatar-cluster">
-          <div className="avatar" title="You (Local)" style={{ fontSize: '10px', width: '24px', height: '24px' }}>Me</div>
-          {peers.map((peerId, idx) => (
-            <div key={peerId} className="avatar remote" title={`Peer: ${peerId}`} style={{ fontSize: '10px', width: '24px', height: '24px' }}>
+          {/* Local User Avatar */}
+          <div 
+            className={`avatar ${!isOnline ? 'offline-avatar' : ''}`} 
+            title="You (Local)" 
+            style={{ fontSize: '10px', width: '24px', height: '24px' }}
+          >
+            Me
+          </div>
+
+          {/* Remote Peer Avatars with status styling */}
+          {Object.entries(peerStatuses).map(([clientId, online], idx) => (
+            <div 
+              key={clientId} 
+              className={`avatar remote ${!online ? 'offline-avatar' : ''}`} 
+              title={`Peer: ${clientId} (${online ? 'Online' : 'Offline'})`} 
+              style={{ fontSize: '10px', width: '24px', height: '24px' }}
+            >
               {String.fromCharCode(65 + (idx % 26))}
             </div>
           ))}

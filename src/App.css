@@ -343,3 +343,10 @@ body {
   border: none;
   cursor: pointer;
 }
+
+/* Dimmed styling for offline user avatars */
+.avatar.offline-avatar {
+  opacity: 0.4;
+  filter: grayscale(100%);
+  border-color: #ea4335 !important;
+}
