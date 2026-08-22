@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useHash } from "react-use";
 import { 
   Star, Share, MessageSquare, Video, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
@@ -6,54 +7,80 @@ import {
 } from 'lucide-react';
 
 // ProseMirror Imports
-import { EditorState, Plugin, PluginKey, TextSelection } from 'prosemirror-state';
+import { EditorState, Plugin, PluginKey } from 'prosemirror-state';
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 
+import {  RootDocument } from "./rootDoc";
 
 // Automerge Repo Imports
-import { AutomergeUrl } from "@automerge/automerge-repo";
-import { useDocHandle, useDocument } from "@automerge/automerge-repo-react-hooks";
+import { AutomergeUrl, isValidAutomergeUrl } from "@automerge/automerge-repo";
+import { useDocHandle, useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
 import { init } from "@automerge/prosemirror";
 
 import './App.css';
 
-// --- FEATURE 2: Syncing Title ---
-// Header now accepts title state and a change handler
-const Header = ({ title, onTitleChange }: { title: string, onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void }) => (
-  <header className="docs-header">
-    <div className="header-brand">
-      <div className="docs-logo">
-        <FileText size={40} fill="#1a73e8" color="white" strokeWidth={1} />
-      </div>
-      <div className="header-meta">
-        <div className="doc-title-row">
-          <input 
-            type="text" 
-            className="doc-title-input" 
-            value={title} 
-            onChange={onTitleChange} 
-            placeholder="Untitled document"
-          />
-          <Star size={16} className="text-muted cursor-pointer" />
+const Header = ({ 
+  title, 
+  onTitleChange 
+}: { 
+  title: string, 
+  onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void 
+}) => {
+  // 1. State to track if the link was just copied
+  const [copied, setCopied] = useState(false);
+
+  // 2. Handler to copy the current URL to the clipboard
+  const handleShareClick = () => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true);
+      // Revert the button text back to "Share" after 2 seconds
+      setTimeout(() => setCopied(false), 2000); 
+    }).catch(err => {
+      console.error("Failed to copy URL: ", err);
+    });
+  };
+
+  return (
+    <header className="docs-header">
+      <div className="header-brand">
+        <div className="docs-logo">
+          <FileText size={40} fill="#1a73e8" color="white" strokeWidth={1} />
         </div>
-        <nav className="doc-menu">
-          {['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Help'].map(item => (
-            <button key={item} className="menu-btn">{item}</button>
-          ))}
-        </nav>
+        <div className="header-meta">
+          <div className="doc-title-row">
+            <input 
+              type="text" 
+              className="doc-title-input" 
+              value={title} 
+              onChange={onTitleChange} 
+              placeholder="Untitled document"
+            />
+            <Star size={16} className="text-muted cursor-pointer" />
+          </div>
+          <nav className="doc-menu">
+            {['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Help'].map(item => (
+              <button key={item} className="menu-btn">{item}</button>
+            ))}
+          </nav>
+        </div>
       </div>
-    </div>
-    <div className="header-actions">
-      <button className="icon-btn"><MessageSquare size={18} /></button>
-      <button className="icon-btn"><Video size={18} /></button>
-      <button className="share-btn"><Share size={16} /> Share</button>
-      <div className="avatar">D</div>
-    </div>
-  </header>
-);
+      <div className="header-actions">
+        <button className="icon-btn"><MessageSquare size={18} /></button>
+        <button className="icon-btn"><Video size={18} /></button>
+        
+        {/* 3. Wire up the Share button */}
+        <button className="share-btn" onClick={handleShareClick}>
+          <Share size={16} /> {copied ? "Copied!" : "Share"}
+        </button>
+        
+        <div className="avatar">D</div>
+      </div>
+    </header>
+  );
+};
 
 const isMarkActive = (state: EditorState | null, markType: any) => {
   if (!state) return false;
@@ -136,57 +163,67 @@ const Toolbar = ({
   );
 };
 
-// --- FEATURE 1: Dynamic Outline ---
-const Sidebar = ({ editorState, view }: { editorState: EditorState | null, view: EditorView | null }) => {
-  // Extract headings from the current document state
-  const headings: { text: string, level: number, pos: number, id: string }[] = [];
-  
-  if (editorState) {
-    editorState.doc.descendants((node, pos) => {
-      if (node.type.name === 'heading') {
-        headings.push({
-          text: node.textContent || 'Empty heading',
-          level: node.attrs.level,
-          pos: pos,
-          id: `heading-${pos}`
-        });
-      }
-    });
-  }
+// Helper to fetch the title for items in the sidebar
+const DocumentTitle = ({ docUrl }: { docUrl: AutomergeUrl }) => {
+  const [doc] = useDocument<{ title?: string }>(docUrl);
+  return <span>{doc?.title || "Untitled document"}</span>;
+};
 
-  // Handle clicking a heading to scroll to it
-  const scrollToHeading = (pos: number) => {
-    if (!view) return;
-    const tr = view.state.tr;
-    // Set cursor at the heading and scroll it into the viewport
-    tr.setSelection(TextSelection.create(tr.doc, pos));
-    tr.scrollIntoView();
-    view.dispatch(tr);
-    view.focus();
+const Sidebar = ({ 
+  rootDocUrl, 
+  selectedDocUrl, 
+  onSelect 
+}: { 
+  rootDocUrl: AutomergeUrl, 
+  selectedDocUrl: AutomergeUrl | null, 
+  onSelect: (url: AutomergeUrl) => void 
+}) => {
+  const repo = useRepo();
+  const [rootDoc, changeRootDoc] = useDocument<RootDocument>(rootDocUrl);
+
+  // Safely fallback to an empty array if rootDoc or documents is not yet defined
+  const documents = rootDoc?.documents || [];
+
+  // If a user opens a shared link, automatically save it to their root document
+  useEffect(() => {
+    if (selectedDocUrl) {
+      changeRootDoc((d) => {
+        // Ensure d.documents is initialized
+        if (!d.documents) d.documents = [];
+        if (!d.documents.includes(selectedDocUrl)) {
+          d.documents.push(selectedDocUrl);
+        }
+      });
+    }
+  }, [selectedDocUrl, changeRootDoc]);
+
+  const handleNewDocument = () => {
+    const newDoc = repo.create({ text: "", title: "Untitled document" });
+    changeRootDoc(d => {
+      if (!d.documents) d.documents = [];
+      d.documents.push(newDoc.url);
+    });
+    onSelect(newDoc.url);
   };
 
   return (
     <aside className="docs-sidebar">
       <div className="sidebar-header">
-        <span className="font-semibold">Document outline</span>
+        <span className="font-semibold">My Documents</span>
+        <button className="icon-btn" onClick={handleNewDocument}>+</button>
       </div>
       <div className="sidebar-content">
-        {headings.length === 0 ? (
-          <div className="text-muted text-sm">Headings you add to the document will appear here.</div>
-        ) : (
-          <div className="outline-list">
-            {headings.map(h => (
-              <div 
-                key={h.id} 
-                className="outline-item" 
-                style={{ paddingLeft: `${(h.level - 1) * 16}px` }}
-                onClick={() => scrollToHeading(h.pos)}
-              >
-                {h.text}
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="outline-list">
+          {documents.map(url => (
+            <div 
+              key={url} 
+              className={`outline-item ${url === selectedDocUrl ? 'active' : ''}`}
+              onClick={() => onSelect(url as AutomergeUrl)}
+            >
+              📄 <DocumentTitle docUrl={url as AutomergeUrl} />
+            </div>
+          ))}
+        </div>
       </div>
     </aside>
   );
@@ -268,7 +305,7 @@ const ProseMirrorEditor = ({
   useEffect(() => {
     if (handle) {
       handle.whenReady().then(() => {
-        if (handle.docSync() != null) setLoaded(true);
+        if (handle.doc() != null) setLoaded(true);
       });
     }
   }, [handle]);
@@ -333,42 +370,48 @@ const ProseMirrorEditor = ({
   return <div ref={editorRoot} className="prosemirror-mount" />;
 };
 
-export default function App({ docUrl }: { docUrl: AutomergeUrl }) {
-  const [sidebarOpen] = useState(true);
+export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-
-  // Attach the document hook to manage the Title property globally
-  const [doc, changeDoc] = useDocument<{ title?: string, text: string }>(docUrl);
   
-  // Safely fallback to "Untitled document" if the title property hasn't been set yet
+  // URL Hash routing to manage the active document
+  const [hash, setHash] = useHash();
+  const cleanHash = hash.slice(1);
+  const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
+    ? (cleanHash as AutomergeUrl) 
+    : null;
+
+  const [doc, changeDoc] = useDocument<{ title?: string, text: string }>(selectedDocUrl || "" as AutomergeUrl);
   const title = doc?.title || "Untitled document";
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    changeDoc((d) => {
-      d.title = e.target.value;
-    });
+    if (selectedDocUrl) changeDoc((d) => { d.title = e.target.value; });
   };
 
   return (
     <div className="app-container">
       <Header title={title} onTitleChange={handleTitleChange} />
-      
-      {/* FIX: Removed font={font} setFont={setFont} */}
-      <Toolbar view={editorView} editorState={editorState} /> 
-      
+      <Toolbar view={editorView} editorState={editorState} />
       <main className="main-workspace">
-        {sidebarOpen && <Sidebar editorState={editorState} view={editorView} />}
+        <Sidebar 
+          rootDocUrl={rootDocUrl} 
+          selectedDocUrl={selectedDocUrl} 
+          onSelect={(url) => setHash(url)} 
+        />
         <section className="editor-container">
-          
-          {/* FIX: Removed style={{ fontFamily: font }} */}
-          <div className="document-page"> 
-            
-            <ProseMirrorEditor 
-              docUrl={docUrl} 
-              onViewCreated={setEditorView}
-              onStateChange={setEditorState}
-            />
+          <div className="document-page">
+            {selectedDocUrl ? (
+              <ProseMirrorEditor 
+                key={selectedDocUrl} // Force remount on doc change
+                docUrl={selectedDocUrl} 
+                onViewCreated={setEditorView}
+                onStateChange={setEditorState}
+              />
+            ) : (
+              <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
+                Select or create a document to begin editing.
+              </div>
+            )}
           </div>
         </section>
       </main>

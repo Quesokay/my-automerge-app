@@ -7,6 +7,7 @@ import React from "react"
 import ReactDOM from "react-dom/client"
 import App from "./App.tsx"
 import "./index.css"
+import { getOrCreateRoot } from "./rootDoc";
 
 const repo = new Repo({
   network: [
@@ -16,14 +17,13 @@ const repo = new Repo({
   storage: new IndexedDBStorageAdapter("automerge"),
 })
 
-const rootDocUrl = `${document.location.hash.substring(1)}`
+const rootDocUrl = getOrCreateRoot(repo);
 let handle
 if (isValidAutomergeUrl(rootDocUrl)) {
   handle = await repo.find(rootDocUrl)
 } else {
   handle = repo.create({ text: "hello world" })
 }
-const docUrl = (document.location.hash = handle.url)
 // @ts-expect-error -- we put the handle and the repo on window so you can experiment with them from the dev tools
 window.handle = handle // we'll use this later for experimentation
 // @ts-expect-error -- we put the handle and the repo on window so you can experiment with them from the dev tools
@@ -33,7 +33,7 @@ window.repo = repo
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <RepoContext.Provider value={repo}>
-      <App docUrl={docUrl} />
+      <App rootDocUrl={rootDocUrl} />
     </RepoContext.Provider>
   </React.StrictMode>,
 )
