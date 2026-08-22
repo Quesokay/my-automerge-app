@@ -19,19 +19,77 @@ import { init } from "@automerge/prosemirror";
 import { useHash } from "react-use";
 import { RootDocument } from "./rootDoc";
 
+import { goOffline, goOnline } from './main';
+
 import './App.css';
 
-// --- Updated Header with Chat Toggle ---
+const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
+  const handle = useDocHandle(docUrl);
+  const [peers, setPeers] = useState<string[]>([]);
+  const [isOnline, setIsOnline] = useState(true);
+
+  useEffect(() => {
+    if (!handle) return;
+    const updatePeers = (msg: any) => {
+      if (msg && msg.senderId) {
+        setPeers(prev => Array.from(new Set([...prev, msg.senderId])));
+      }
+    };
+    handle.on("ephemeral-message", updatePeers);
+    return () => {
+      handle.off("ephemeral-message", updatePeers);
+    };
+  }, [handle]);
+
+  const toggleConnection = () => {
+    if (isOnline) {
+      goOffline();
+      setIsOnline(false);
+    } else {
+      goOnline();
+      setIsOnline(true);
+    }
+  };
+
+  return (
+    <div className="presence-bar">
+      <button 
+        className={`status-badge ${isOnline ? 'online' : 'offline'}`} 
+        onClick={toggleConnection}
+        title="Click to toggle Online/Offline"
+      >
+        <span className="status-dot" />
+        {isOnline ? "Online" : "Offline"}
+      </button>
+
+      <div className="friend-avatars">
+        <span className="text-muted text-sm" style={{ marginRight: '6px' }}>Active:</span>
+        <div className="avatar-cluster">
+          <div className="avatar" title="You (Local)" style={{ fontSize: '10px', width: '24px', height: '24px' }}>Me</div>
+          {peers.map((peerId, idx) => (
+            <div key={peerId} className="avatar remote" title={`Peer: ${peerId}`} style={{ fontSize: '10px', width: '24px', height: '24px' }}>
+              {String.fromCharCode(65 + (idx % 26))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 2. Update Header to accept docUrl and render PresenceBar
 const Header = ({ 
   title, 
   onTitleChange, 
   onToggleChat, 
-  chatOpen 
+  chatOpen,
+  selectedDocUrl
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onToggleChat: () => void;
   chatOpen: boolean;
+  selectedDocUrl: AutomergeUrl | null;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -67,7 +125,9 @@ const Header = ({
         </div>
       </div>
       <div className="header-actions">
-        {/* Chat toggle button */}
+        {/* Render Presence bar if a document is active */}
+        {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} />}
+
         <button className={`icon-btn ${chatOpen ? 'active' : ''}`} onClick={onToggleChat} title="Toggle Chat">
           <MessageSquare size={18} />
         </button>
@@ -449,6 +509,7 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         onTitleChange={handleTitleChange} 
         onToggleChat={() => setChatOpen(!chatOpen)} 
         chatOpen={chatOpen}
+        selectedDocUrl={selectedDocUrl}
       />
       <Toolbar view={editorView} editorState={editorState} />
       <main className="main-workspace">
