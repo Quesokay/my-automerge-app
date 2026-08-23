@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Star, Share, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
-  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle
+  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle, History
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -13,6 +13,7 @@ import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 
 // Automerge Repo Imports
+import * as A from "@automerge/automerge";
 import { AutomergeUrl, isValidAutomergeUrl } from "@automerge/automerge-repo";
 import { useRepo, useDocument, useDocHandle } from "@automerge/automerge-repo-react-hooks";
 import { init } from "@automerge/prosemirror";
@@ -21,6 +22,106 @@ import { RootDocument } from "./rootDoc";
 import { goOffline, goOnline } from './main';
 
 import './App.css';
+
+const HistoryDrawer = ({ 
+  docUrl, 
+  onClose,
+  selectedVersion,
+  onSelectVersion
+}: { 
+  docUrl: AutomergeUrl; 
+  onClose: () => void;
+  selectedVersion: string | null;
+  onSelectVersion: (hash: string) => void;
+}) => {
+  const [doc] = useDocument(docUrl);
+
+  const history = useMemo(() => {
+    if (!doc) return [];
+    try {
+      const changes = A.getAllChanges(doc);
+      
+      // We will group changes that happen within 2 minutes of each other
+      const GROUPING_WINDOW_MS = 120000; 
+      const grouped = [];
+      let currentGroup: any = null;
+
+      changes.forEach((changeBytes) => {
+        const decoded = A.decodeChange(changeBytes);
+        const changeTime = decoded.time;
+        const author = `User ${decoded.actor.substring(0, 5)}`;
+
+        if (!currentGroup) {
+          currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+        } else {
+          // If the same author typed again within the time window, cluster it!
+          if (currentGroup.author === author && (changeTime - currentGroup.time < GROUPING_WINDOW_MS)) {
+            currentGroup.id = decoded.hash; // Track the latest state of this burst
+            currentGroup.time = changeTime; // Update to the latest timestamp
+            currentGroup.count += 1;
+          } else {
+            // Time window closed or new author. Push the old group and start a new one.
+            grouped.push(currentGroup);
+            currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+          }
+        }
+      });
+
+      if (currentGroup) grouped.push(currentGroup);
+
+      // Reverse it so newest clusters are at the top, and format the output
+      return grouped.reverse().map((item, idx) => ({
+        ...item,
+        displayTime: new Date(item.time).toLocaleString([], { 
+          month: 'short', day: 'numeric', 
+          hour: '2-digit', minute: '2-digit' 
+        }),
+        // Add a nice message showing how many keystrokes/changes were clustered
+        message: idx === grouped.length - 1 
+          ? "Created document" 
+          : (item.count > 1 ? `Made ${item.count} edits` : "Edited document")
+      }));
+
+    } catch (e) {
+      console.error("Failed to decode history", e);
+      return [];
+    }
+  }, [doc]);
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', display: 'flex', flexDirection: 'column' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Version History</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div className="sidebar-content" style={{ padding: '8px', overflowY: 'auto', flex: 1 }}>
+        {history.length === 0 ? (
+          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>No history found.</div>
+        ) : (
+          history.map(item => (
+            <div 
+              key={item.id} 
+              onClick={() => onSelectVersion(item.id)}
+              style={{ 
+                padding: '12px', 
+                borderBottom: '1px solid var(--border-color)', 
+                cursor: 'pointer', 
+                transition: 'background 0.2s',
+                backgroundColor: selectedVersion === item.id ? 'var(--active-bg)' : 'transparent'
+              }} 
+            >
+              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.displayTime}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                <span className="text-muted text-sm">{item.author}</span>
+                <span className="text-muted text-sm" style={{ fontStyle: 'italic', fontSize: '11px' }}>{item.message}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+};
 
 const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   const handle = useDocHandle(docUrl);
@@ -70,24 +171,32 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   };
 
   return (
-    <div className="presence-bar">
+    <div className="presence-bar" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '16px', paddingRight: '8px', borderRight: '1px solid var(--border-color)', marginRight: '8px' }}>
+      
       <button 
         className={`status-badge ${isOnline ? 'online' : 'offline'}`} 
         onClick={toggleConnection}
         title="Click to toggle Online/Offline"
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '4px 10px', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'white' }}
       >
-        <span className="status-dot" />
-        {isOnline ? "Online" : "Offline"}
+        <span 
+          className="status-dot" 
+          style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: isOnline ? '#34a853' : '#ea4335' }} 
+        />
+        <span style={{ fontSize: '12px', fontWeight: 600 }}>
+          {isOnline ? "Online" : "Offline"}
+        </span>
       </button>
 
-      <div className="friend-avatars">
-        <span className="text-muted text-sm" style={{ marginRight: '6px' }}>Active:</span>
-        <div className="avatar-cluster">
+      <div className="friend-avatars" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span className="text-muted text-sm" style={{ fontSize: '12px' }}>Active:</span>
+        <div className="avatar-cluster" style={{ display: 'flex', alignItems: 'center' }}>
+          
           {/* Local User Avatar */}
           <div 
             className={`avatar ${!isOnline ? 'offline-avatar' : ''}`} 
             title="You (Local)" 
-            style={{ fontSize: '10px', width: '24px', height: '24px' }}
+            style={{ fontSize: '10px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: '#9c27b0', color: 'white', border: '2px solid white', zIndex: 10 }}
           >
             Me
           </div>
@@ -98,13 +207,14 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
               key={clientId} 
               className={`avatar remote ${!online ? 'offline-avatar' : ''}`} 
               title={`Peer: ${clientId} (${online ? 'Online' : 'Offline'})`} 
-              style={{ fontSize: '10px', width: '24px', height: '24px' }}
+              style={{ fontSize: '10px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: '#fbbc04', color: '#202124', border: '2px solid white', marginLeft: '-6px', zIndex: 9 - idx }}
             >
               {String.fromCharCode(65 + (idx % 26))}
             </div>
           ))}
         </div>
       </div>
+      
     </div>
   );
 };
@@ -112,11 +222,15 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
 const Header = ({ 
   title, 
   onTitleChange, 
-  selectedDocUrl
+  selectedDocUrl,
+  historyOpen,
+  onToggleHistory
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   selectedDocUrl: AutomergeUrl | null;
+  historyOpen: boolean;
+  onToggleHistory: () => void;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -153,6 +267,16 @@ const Header = ({
       </div>
       <div className="header-actions">
         {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} />}
+        
+        {/* NEW: History Toggle Button */}
+        <button 
+          className={`icon-btn ${historyOpen ? 'active' : ''}`} 
+          onClick={onToggleHistory} 
+          title="Open Version History"
+        >
+          <History size={18} />
+        </button>
+
         <button className="share-btn" onClick={handleShareClick}>
           <Share size={16} /> {copied ? "Copied!" : "Share"}
         </button>
@@ -483,18 +607,56 @@ const ProseMirrorEditor = ({
 export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   
+  // --- Time Travel States ---
+  const [timeTravelUrl, setTimeTravelUrl] = useState<AutomergeUrl | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  
+  const repo = useRepo();
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
     ? (cleanHash as AutomergeUrl) 
     : null;
 
+  // We need direct access to the handle to view historical states
+  const handle = useDocHandle(selectedDocUrl ?? undefined);
   const [doc, changeDoc] = useDocument<{ title?: string, text: string }>(selectedDocUrl || "" as AutomergeUrl);
+  
   const title = doc?.title || "Untitled document";
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (selectedDocUrl) changeDoc((d) => { d.title = e.target.value; });
+    if (selectedDocUrl && !selectedVersion) changeDoc((d) => { d.title = e.target.value; });
+  };
+
+  // --- The Time Machine Logic ---
+  // --- The Time Machine Logic ---
+  const handleTimeTravel = (versionHash: string) => {
+    const currentDoc = handle?.docSync();
+    if (!currentDoc) return;
+
+    try {
+      // 1. Ask Automerge to rewind the document to this exact moment
+      const oldDoc = A.view(currentDoc, [versionHash]);
+      
+      // 2. Create a blank temporary document in the repo
+      const tempHandle = repo.create();
+      
+      // 3. Safely inject the cloned historical state (preserves all formatting!)
+      tempHandle.update(() => A.clone(oldDoc));
+      
+      // 4. Point our editor to the temporary document
+      setTimeTravelUrl(tempHandle.url);
+      setSelectedVersion(versionHash);
+    } catch (e) {
+      console.error("Failed to travel back in time:", e);
+    }
+  };
+
+  const exitTimeTravel = () => {
+    setTimeTravelUrl(null);
+    setSelectedVersion(null);
   };
 
   return (
@@ -503,30 +665,66 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         title={title} 
         onTitleChange={handleTitleChange} 
         selectedDocUrl={selectedDocUrl}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen(!historyOpen)}
       />
       <Toolbar view={editorView} editorState={editorState} />
-      <main className="main-workspace">
+      
+      <main className="main-workspace" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <Sidebar 
           rootDocUrl={rootDocUrl} 
           selectedDocUrl={selectedDocUrl} 
-          onSelect={(url) => setHash(url)} 
+          onSelect={(url) => { setHash(url); exitTimeTravel(); }} 
         />
-        <section className="editor-container">
-          <div className="document-page">
-            {selectedDocUrl ? (
-              <ProseMirrorEditor 
-                key={selectedDocUrl} 
-                docUrl={selectedDocUrl} 
-                onViewCreated={setEditorView}
-                onStateChange={setEditorState}
-              />
-            ) : (
-              <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
-                Select or create a document to begin editing.
-              </div>
-            )}
-          </div>
-        </section>
+        
+        {/* NEW: Wrapper to stack the banner and editor vertically */}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+          
+          {/* Time Travel Warning Banner */}
+          {selectedVersion && (
+            <div style={{ backgroundColor: '#fef7e0', padding: '12px 24px', borderBottom: '1px solid #f2c75c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+              <span style={{ color: '#b06000', fontWeight: 600, fontSize: '14px' }}>
+                Viewing a historical version of this document.
+              </span>
+              <button 
+                onClick={exitTimeTravel} 
+                style={{ background: '#b06000', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}
+              >
+                Return to Current
+              </button>
+            </div>
+          )}
+
+          {/* The original editor container takes the remaining height */}
+          <section className="editor-container" style={{ flex: 1, overflowY: 'auto' }}>
+            <div className="document-page">
+              {selectedDocUrl ? (
+                <div style={selectedVersion ? { pointerEvents: 'none', opacity: 0.7, filter: 'grayscale(20%)' } : {}}>
+                  <ProseMirrorEditor 
+                    key={timeTravelUrl || selectedDocUrl} 
+                    docUrl={timeTravelUrl || selectedDocUrl} 
+                    onViewCreated={setEditorView}
+                    onStateChange={setEditorState}
+                  />
+                </div>
+              ) : (
+                <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
+                  Select or create a document to begin editing.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+        
+        {/* Version History Sidebar */}
+        {selectedDocUrl && historyOpen && (
+          <HistoryDrawer 
+            docUrl={selectedDocUrl} 
+            onClose={() => setHistoryOpen(false)} 
+            selectedVersion={selectedVersion}
+            onSelectVersion={handleTimeTravel}
+          />
+        )}
       </main>
     </div>
   );

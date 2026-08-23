@@ -370,3 +370,27 @@ body {
 .ProseMirror p {
   min-height: 1.2em;
 }
+/* --- Live Multiplayer Cursors --- */
+.remote-cursor {
+  position: relative;
+  border-left: 2px solid; /* The colored caret */
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.remote-cursor-flag {
+  position: absolute;
+  top: -18px; /* Floats above the text line */
+  left: -2px; /* Anchors to the caret */
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
