@@ -40,19 +40,50 @@ const HistoryDrawer = ({
     if (!doc) return [];
     try {
       const changes = A.getAllChanges(doc);
-      return changes.map((changeBytes, index) => {
+      
+      // We will group changes that happen within 2 minutes of each other
+      const GROUPING_WINDOW_MS = 120000; 
+      const grouped = [];
+      let currentGroup: any = null;
+
+      changes.forEach((changeBytes) => {
         const decoded = A.decodeChange(changeBytes);
-        return {
-          id: decoded.hash || `change-${index}`,
-          time: new Date(decoded.time).toLocaleString([], { 
-            month: 'short', day: 'numeric', 
-            hour: '2-digit', minute: '2-digit', second: '2-digit' 
-          }),
-          author: `User ${decoded.actor.substring(0, 5)}`,
-          message: decoded.message || (index === 0 ? "Created document" : "Edited document")
-        };
-      }).reverse();
+        const changeTime = decoded.time;
+        const author = `User ${decoded.actor.substring(0, 5)}`;
+
+        if (!currentGroup) {
+          currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+        } else {
+          // If the same author typed again within the time window, cluster it!
+          if (currentGroup.author === author && (changeTime - currentGroup.time < GROUPING_WINDOW_MS)) {
+            currentGroup.id = decoded.hash; // Track the latest state of this burst
+            currentGroup.time = changeTime; // Update to the latest timestamp
+            currentGroup.count += 1;
+          } else {
+            // Time window closed or new author. Push the old group and start a new one.
+            grouped.push(currentGroup);
+            currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+          }
+        }
+      });
+
+      if (currentGroup) grouped.push(currentGroup);
+
+      // Reverse it so newest clusters are at the top, and format the output
+      return grouped.reverse().map((item, idx) => ({
+        ...item,
+        displayTime: new Date(item.time).toLocaleString([], { 
+          month: 'short', day: 'numeric', 
+          hour: '2-digit', minute: '2-digit' 
+        }),
+        // Add a nice message showing how many keystrokes/changes were clustered
+        message: idx === grouped.length - 1 
+          ? "Created document" 
+          : (item.count > 1 ? `Made ${item.count} edits` : "Edited document")
+      }));
+
     } catch (e) {
+      console.error("Failed to decode history", e);
       return [];
     }
   }, [doc]);
@@ -79,7 +110,7 @@ const HistoryDrawer = ({
                 backgroundColor: selectedVersion === item.id ? 'var(--active-bg)' : 'transparent'
               }} 
             >
-              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.time}</div>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.displayTime}</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                 <span className="text-muted text-sm">{item.author}</span>
                 <span className="text-muted text-sm" style={{ fontStyle: 'italic', fontSize: '11px' }}>{item.message}</span>
@@ -591,23 +622,20 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   };
 
   // --- The Time Machine Logic ---
+  // --- The Time Machine Logic ---
   const handleTimeTravel = (versionHash: string) => {
-    const currentDoc = handle?.doc();
+    const currentDoc = handle?.docSync();
     if (!currentDoc) return;
 
     try {
-      // 1. Ask Automerge to rewind the document to this exact moment in time
+      // 1. Ask Automerge to rewind the document to this exact moment
       const oldDoc = A.view(currentDoc, [versionHash]);
       
-      // 2. Strip the CRDT metadata to create a clean JSON snapshot of the text
-      const snapshot = JSON.parse(JSON.stringify(oldDoc));
-
-      if (snapshot.text && typeof snapshot.text === 'string') {
-        snapshot.text = snapshot.text.replace(/\uFFFC/g, ''); 
-      }
+      // 2. Create a blank temporary document in the repo
+      const tempHandle = repo.create();
       
-      // 3. Create a temporary, un-synced document in the repo to hold this snapshot
-      const tempHandle = repo.create(snapshot);
+      // 3. Safely inject the cloned historical state (preserves all formatting!)
+      tempHandle.update(() => A.clone(oldDoc));
       
       // 4. Point our editor to the temporary document
       setTimeTravelUrl(tempHandle.url);
