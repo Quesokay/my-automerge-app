@@ -330,14 +330,27 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
   );
 };
 
-const LobbyDrawer = ({ identity, onClose }: { identity: UserIdentity, onClose: () => void }) => {
+
+
+const LobbyDrawer = ({ 
+  identity, 
+  activeDocUrl,
+  onJoinDocument,
+  onClose 
+}: { 
+  identity: UserIdentity;
+  activeDocUrl: AutomergeUrl | null;
+  onJoinDocument: (url: AutomergeUrl) => void;
+  onClose: () => void;
+}) => {
   const [activePeers, setActivePeers] = useState<Record<string, UserIdentity>>({});
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     const ws = new WebSocket('ws://localhost:3031');
+    wsRef.current = ws;
     
     ws.onopen = () => {
-      // Announce our identity to the public swarm
       ws.send(JSON.stringify({ type: 'lobby-presence', identity }));
     };
 
@@ -345,23 +358,43 @@ const LobbyDrawer = ({ identity, onClose }: { identity: UserIdentity, onClose: (
       try {
         const data = JSON.parse(event.data);
         
-        // If someone new announces themselves, save them and echo back our identity
         if (data.type === 'lobby-presence' && data.identity.clientId !== identity.clientId) {
           setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
           ws.send(JSON.stringify({ type: 'lobby-presence-reply', identity }));
         }
         
-        // If someone replies to our announcement, save them
         if (data.type === 'lobby-presence-reply' && data.identity.clientId !== identity.clientId) {
           setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
         }
-      } catch (e) {
-        // Ignore non-JSON or Automerge sync messages for now
-      }
+
+        // NEW: Handle incoming document invitations
+        if (data.type === 'lobby-invite' && data.to === identity.clientId) {
+          if (window.confirm(`${data.from.name} invited you to collaborate on a document. Join them?`)) {
+            onJoinDocument(data.url);
+            onClose(); // Hide the lobby to show the editor
+          }
+        }
+      } catch (e) {}
     };
 
     return () => ws.close();
   }, [identity]);
+
+  const handleInvite = (peerId: string) => {
+    if (!activeDocUrl) {
+      alert("Please open or create a document first before inviting someone!");
+      return;
+    }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'lobby-invite',
+        from: identity,
+        to: peerId,
+        url: activeDocUrl
+      }));
+      // Optional: change button text temporarily to "Sent!" here
+    }
+  };
 
   return (
     <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', backgroundColor: '#f9fbfd' }}>
@@ -380,7 +413,11 @@ const LobbyDrawer = ({ identity, onClose }: { identity: UserIdentity, onClose: (
               </div>
               <span style={{ fontSize: '13px', fontWeight: 600 }}>{peer.name}</span>
             </div>
-            <button style={{ padding: '6px 12px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>
+            {/* NEW: Trigger the invite function */}
+            <button 
+              onClick={() => handleInvite(peer.clientId)}
+              style={{ padding: '6px 12px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+            >
               Invite
             </button>
           </div>
@@ -954,6 +991,18 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
     }
   };
 
+  // Add this function near your other handlers in App
+  const handleJoinDocument = (url: AutomergeUrl) => {
+    changeDoc((d: any) => {
+      if (!d.documents) d.documents = [];
+      // Prevent adding duplicates to the sidebar
+      if (!d.documents.includes(url)) {
+        d.documents.push(url);
+      }
+    });
+    window.location.hash = url;
+  };
+
   const exitTimeTravel = () => {
     setTimeTravelUrl(null);
     setSelectedVersion(null);
@@ -1020,7 +1069,11 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
           <ChatDrawer docUrl={selectedDocUrl} onClose={() => setChatOpen(false)} identity={myIdentity} />
         )}
         {lobbyOpen && (
-          <LobbyDrawer identity={myIdentity} onClose={() => setLobbyOpen(false)} />
+          <LobbyDrawer 
+          identity={myIdentity} 
+          onClose={() => setLobbyOpen(false)} 
+          activeDocUrl={selectedDocUrl} 
+          onJoinDocument={handleJoinDocument} />
         )}
       </main>
     </div>
