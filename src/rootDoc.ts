@@ -1,6 +1,7 @@
 import { AutomergeUrl, Repo } from "@automerge/automerge-repo";
 
-const ROOT_DOC_URL_KEY = "root-doc-url";
+// Change this key to force a clean slate
+const ROOT_DOC_URL_KEY = "root-doc-url-v3";
 
 export type RootDocument = {
   documents: AutomergeUrl[];
@@ -11,7 +12,6 @@ export const getOrCreateRoot = (repo: Repo): AutomergeUrl => {
   if (existingId) {
     return existingId as AutomergeUrl;
   }
-  // Initialize a new root document if one doesn't exist
   const root = repo.create<RootDocument>({ documents: [] });
   localStorage.setItem(ROOT_DOC_URL_KEY, root.url);
   return root.url;

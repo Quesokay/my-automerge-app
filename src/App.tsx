@@ -122,7 +122,9 @@ const Header = ({
   onToggleHistory,
   chatOpen,
   onToggleChat,
-  identity
+  identity,
+  lobbyOpen,
+  onToggleLobby,
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -132,6 +134,8 @@ const Header = ({
   chatOpen: boolean;
   onToggleChat: () => void;
   identity: UserIdentity;
+  lobbyOpen: boolean; // <-- ADDED
+  onToggleLobby: () => void;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -168,7 +172,13 @@ const Header = ({
       </div>
       <div className="header-actions">
         {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} clientId={identity.clientId} />}
-        
+        <button 
+          className={`share-btn ${lobbyOpen ? 'active' : ''}`} 
+          onClick={onToggleLobby} 
+          style={{ background: '#34a853' }}
+        >
+          Lobby
+        </button>
         <button 
           className={`icon-btn ${chatOpen ? 'active' : ''}`} 
           onClick={onToggleChat} 
@@ -317,6 +327,106 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
         </div>
       )}
     </>
+  );
+};
+
+
+
+const LobbyDrawer = ({ 
+  identity, 
+  activeDocUrl,
+  onJoinDocument,
+  onClose 
+}: { 
+  identity: UserIdentity;
+  activeDocUrl: AutomergeUrl | null;
+  onJoinDocument: (url: AutomergeUrl) => void;
+  onClose: () => void;
+}) => {
+  const [activePeers, setActivePeers] = useState<Record<string, UserIdentity>>({});
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:3031');
+    wsRef.current = ws;
+    
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'lobby-presence', identity }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'lobby-presence' && data.identity.clientId !== identity.clientId) {
+          setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
+          ws.send(JSON.stringify({ type: 'lobby-presence-reply', identity }));
+        }
+        
+        if (data.type === 'lobby-presence-reply' && data.identity.clientId !== identity.clientId) {
+          setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
+        }
+
+        // NEW: Handle incoming document invitations
+        if (data.type === 'lobby-invite' && data.to === identity.clientId) {
+          if (window.confirm(`${data.from.name} invited you to collaborate on a document. Join them?`)) {
+            onJoinDocument(data.url);
+            onClose(); // Hide the lobby to show the editor
+          }
+        }
+      } catch (e) {}
+    };
+
+    return () => ws.close();
+  }, [identity]);
+
+  const handleInvite = (peerId: string) => {
+    if (!activeDocUrl) {
+      alert("Please open or create a document first before inviting someone!");
+      return;
+    }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'lobby-invite',
+        from: identity,
+        to: peerId,
+        url: activeDocUrl
+      }));
+      // Optional: change button text temporarily to "Sent!" here
+    }
+  };
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', backgroundColor: '#f9fbfd' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', borderBottom: '1px solid var(--border-color)' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Public Lobby</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div style={{ padding: '16px', flex: 1, overflowY: 'auto' }}>
+        <p style={{ fontSize: '12px', color: '#5f6368', marginBottom: '16px' }}>Discovering peers on Hyperswarm...</p>
+        
+        {Object.values(activePeers).map(peer => (
+          <div key={peer.clientId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', backgroundColor: 'white', borderRadius: '8px', marginBottom: '8px', border: '1px solid #dadce0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: peer.color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                {peer.name.charAt(0)}
+              </div>
+              <span style={{ fontSize: '13px', fontWeight: 600 }}>{peer.name}</span>
+            </div>
+            {/* NEW: Trigger the invite function */}
+            <button 
+              onClick={() => handleInvite(peer.clientId)}
+              style={{ padding: '6px 12px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Invite
+            </button>
+          </div>
+        ))}
+        {Object.keys(activePeers).length === 0 && (
+          <div style={{ textAlign: 'center', color: '#80868b', fontSize: '13px', marginTop: '24px' }}>No one else is here yet.</div>
+        )}
+      </div>
+    </aside>
   );
 };
 
@@ -659,7 +769,7 @@ const diffPluginKey = new PluginKey('diffHighlight');
 const diffPlugin = (initialRanges: any[]) => new Plugin({
   key: diffPluginKey,
   state: {
-    init: (config, state) => {
+    init: (_config, state) => {
       if (!initialRanges || initialRanges.length === 0) return DecorationSet.empty;
       const decos: Decoration[] = [];
       const docSize = state.doc.content.size;
@@ -825,7 +935,7 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) ? (cleanHash as AutomergeUrl) : null;
-
+  const [lobbyOpen, setLobbyOpen] = useState(false);
   const handle = useDocHandle(selectedDocUrl ?? undefined);
   const [doc, changeDoc] = useDocument<{ title?: string, text: string, chat?: any[] }>(selectedDocUrl || "" as AutomergeUrl);
   
@@ -837,13 +947,19 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
 
   const toggleHistory = () => {
     setHistoryOpen(!historyOpen);
-    if (!historyOpen) setChatOpen(false); 
+    if (!historyOpen) { setChatOpen(false); setLobbyOpen(false); }
   };
 
   const toggleChat = () => {
     setChatOpen(!chatOpen);
-    if (!chatOpen) setHistoryOpen(false); 
+    if (!chatOpen) { setHistoryOpen(false); setLobbyOpen(false); }
   };
+
+  const toggleLobby = () => {
+    setLobbyOpen(!lobbyOpen);
+    if (!lobbyOpen) { setHistoryOpen(false); setChatOpen(false); }
+  };
+
 
   const handleTimeTravel = (versionHash: string) => {
     const currentDoc = handle?.docSync();
@@ -875,6 +991,18 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
     }
   };
 
+  // Add this function near your other handlers in App
+  const handleJoinDocument = (url: AutomergeUrl) => {
+    changeDoc((d: any) => {
+      if (!d.documents) d.documents = [];
+      // Prevent adding duplicates to the sidebar
+      if (!d.documents.includes(url)) {
+        d.documents.push(url);
+      }
+    });
+    window.location.hash = url;
+  };
+
   const exitTimeTravel = () => {
     setTimeTravelUrl(null);
     setSelectedVersion(null);
@@ -892,6 +1020,8 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         chatOpen={chatOpen}
         onToggleChat={toggleChat}
         identity={myIdentity}
+        lobbyOpen={lobbyOpen}     
+        onToggleLobby={toggleLobby}
       />
       <Toolbar view={editorView} editorState={editorState} />
       
@@ -937,6 +1067,13 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         
         {selectedDocUrl && chatOpen && (
           <ChatDrawer docUrl={selectedDocUrl} onClose={() => setChatOpen(false)} identity={myIdentity} />
+        )}
+        {lobbyOpen && (
+          <LobbyDrawer 
+          identity={myIdentity} 
+          onClose={() => setLobbyOpen(false)} 
+          activeDocUrl={selectedDocUrl} 
+          onJoinDocument={handleJoinDocument} />
         )}
       </main>
     </div>
