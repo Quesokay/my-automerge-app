@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Star, Share, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
-  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle
+  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle, History
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -13,6 +13,7 @@ import { baseKeymap, toggleMark, setBlockType } from 'prosemirror-commands';
 import { history, undo, redo } from 'prosemirror-history';
 
 // Automerge Repo Imports
+import * as A from "@automerge/automerge";
 import { AutomergeUrl, isValidAutomergeUrl } from "@automerge/automerge-repo";
 import { useRepo, useDocument, useDocHandle } from "@automerge/automerge-repo-react-hooks";
 import { init } from "@automerge/prosemirror";
@@ -21,6 +22,60 @@ import { RootDocument } from "./rootDoc";
 import { goOffline, goOnline } from './main';
 
 import './App.css';
+
+const HistoryDrawer = ({ docUrl, onClose }: { docUrl: AutomergeUrl, onClose: () => void }) => {
+  const [doc] = useDocument(docUrl);
+
+  // Extract and decode the actual Automerge change history
+  const history = useMemo(() => {
+    if (!doc) return [];
+    try {
+      const changes = A.getAllChanges(doc);
+      
+      return changes.map((changeBytes, index) => {
+        const decoded = A.decodeChange(changeBytes);
+        return {
+          id: decoded.hash || `change-${index}`,
+          // Automerge times are standard JS timestamps (ms since epoch)
+          time: new Date(decoded.time).toLocaleString([], { 
+            month: 'short', day: 'numeric', 
+            hour: '2-digit', minute: '2-digit', second: '2-digit' 
+          }),
+          // Actor IDs are long hex strings, so we truncate them for UI readability
+          author: `User ${decoded.actor.substring(0, 5)}`,
+          message: decoded.message || (index === 0 ? "Created document" : "Edited document")
+        };
+      }).reverse(); // Reverse so the newest changes are at the top
+    } catch (e) {
+      console.error("Failed to decode history", e);
+      return [];
+    }
+  }, [doc]);
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', display: 'flex', flexDirection: 'column' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Version History</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div className="sidebar-content" style={{ padding: '8px', overflowY: 'auto', flex: 1 }}>
+        {history.length === 0 ? (
+          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>No history found.</div>
+        ) : (
+          history.map(item => (
+            <div key={item.id} style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-bg)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.time}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                <span className="text-muted text-sm">{item.author}</span>
+                <span className="text-muted text-sm" style={{ fontStyle: 'italic', fontSize: '11px' }}>{item.message}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+};
 
 const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   const handle = useDocHandle(docUrl);
@@ -112,11 +167,15 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
 const Header = ({ 
   title, 
   onTitleChange, 
-  selectedDocUrl
+  selectedDocUrl,
+  historyOpen,
+  onToggleHistory
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   selectedDocUrl: AutomergeUrl | null;
+  historyOpen: boolean;
+  onToggleHistory: () => void;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -153,6 +212,16 @@ const Header = ({
       </div>
       <div className="header-actions">
         {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} />}
+        
+        {/* NEW: History Toggle Button */}
+        <button 
+          className={`icon-btn ${historyOpen ? 'active' : ''}`} 
+          onClick={onToggleHistory} 
+          title="Open Version History"
+        >
+          <History size={18} />
+        </button>
+
         <button className="share-btn" onClick={handleShareClick}>
           <Share size={16} /> {copied ? "Copied!" : "Share"}
         </button>
@@ -484,6 +553,9 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   
+  // NEW: History state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
@@ -503,15 +575,17 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         title={title} 
         onTitleChange={handleTitleChange} 
         selectedDocUrl={selectedDocUrl}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen(!historyOpen)}
       />
       <Toolbar view={editorView} editorState={editorState} />
-      <main className="main-workspace">
+      <main className="main-workspace" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <Sidebar 
           rootDocUrl={rootDocUrl} 
           selectedDocUrl={selectedDocUrl} 
           onSelect={(url) => setHash(url)} 
         />
-        <section className="editor-container">
+        <section className="editor-container" style={{ flex: 1, overflowY: 'auto' }}>
           <div className="document-page">
             {selectedDocUrl ? (
               <ProseMirrorEditor 
@@ -527,6 +601,11 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
             )}
           </div>
         </section>
+        
+        {/* NEW: Render History Drawer when toggled */}
+        {selectedDocUrl && historyOpen && (
+          <HistoryDrawer docUrl={selectedDocUrl} onClose={() => setHistoryOpen(false)} />
+        )}
       </main>
     </div>
   );
