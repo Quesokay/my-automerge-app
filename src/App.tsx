@@ -171,24 +171,32 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   };
 
   return (
-    <div className="presence-bar">
+    <div className="presence-bar" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '16px', paddingRight: '8px', borderRight: '1px solid var(--border-color)', marginRight: '8px' }}>
+      
       <button 
         className={`status-badge ${isOnline ? 'online' : 'offline'}`} 
         onClick={toggleConnection}
         title="Click to toggle Online/Offline"
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '4px 10px', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'white' }}
       >
-        <span className="status-dot" />
-        {isOnline ? "Online" : "Offline"}
+        <span 
+          className="status-dot" 
+          style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: isOnline ? '#34a853' : '#ea4335' }} 
+        />
+        <span style={{ fontSize: '12px', fontWeight: 600 }}>
+          {isOnline ? "Online" : "Offline"}
+        </span>
       </button>
 
-      <div className="friend-avatars">
-        <span className="text-muted text-sm" style={{ marginRight: '6px' }}>Active:</span>
-        <div className="avatar-cluster">
+      <div className="friend-avatars" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span className="text-muted text-sm" style={{ fontSize: '12px' }}>Active:</span>
+        <div className="avatar-cluster" style={{ display: 'flex', alignItems: 'center' }}>
+          
           {/* Local User Avatar */}
           <div 
             className={`avatar ${!isOnline ? 'offline-avatar' : ''}`} 
             title="You (Local)" 
-            style={{ fontSize: '10px', width: '24px', height: '24px' }}
+            style={{ fontSize: '10px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: '#9c27b0', color: 'white', border: '2px solid white', zIndex: 10 }}
           >
             Me
           </div>
@@ -199,13 +207,14 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
               key={clientId} 
               className={`avatar remote ${!online ? 'offline-avatar' : ''}`} 
               title={`Peer: ${clientId} (${online ? 'Online' : 'Offline'})`} 
-              style={{ fontSize: '10px', width: '24px', height: '24px' }}
+              style={{ fontSize: '10px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: '#fbbc04', color: '#202124', border: '2px solid white', marginLeft: '-6px', zIndex: 9 - idx }}
             >
               {String.fromCharCode(65 + (idx % 26))}
             </div>
           ))}
         </div>
       </div>
+      
     </div>
   );
 };
