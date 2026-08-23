@@ -1,5 +1,4 @@
 import { Repo } from "@automerge/automerge-repo"
-import { BrowserWebSocketClientAdapter } from "@automerge/automerge-repo-network-websocket"
 import { BroadcastChannelNetworkAdapter } from "@automerge/automerge-repo-network-broadcastchannel"
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb"
 import { RepoContext } from "@automerge/automerge-repo-react-hooks"
@@ -8,19 +7,19 @@ import ReactDOM from "react-dom/client"
 import App from "./App.tsx"
 import "./index.css"
 import { getOrCreateRoot } from "./rootDoc"
+import { MeshAdapter } from "./MeshAdapter"
 
-const wsAdapter = new BrowserWebSocketClientAdapter("wss://sync.automerge.org")
 
 export const repo = new Repo({
   storage: new IndexedDBStorageAdapter("automerge-final"),
   network: [
-    wsAdapter,
+    new MeshAdapter("ws://localhost:3031"),
     new BroadcastChannelNetworkAdapter(),
   ],
 })
 
-export const goOffline = () => { wsAdapter.disconnect() }
-export const goOnline = () => { wsAdapter.connect(repo.peerId) }
+export const goOffline = () => { console.log("Offline mode") }
+export const goOnline = () => { console.log("Online mode") }
 
 const rootDocUrl = getOrCreateRoot(repo)
 
