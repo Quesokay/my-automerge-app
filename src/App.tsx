@@ -320,6 +320,11 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
   );
 };
 
+const DocumentTitle = ({ docUrl }: { docUrl: AutomergeUrl }) => {
+  const [doc] = useDocument<{ title?: string }>(docUrl);
+  return <span>{doc?.title || "Untitled document"}</span>;
+};
+
 const Sidebar = ({ rootDocUrl, selectedDocUrl, onSelect }: { rootDocUrl: AutomergeUrl, selectedDocUrl: AutomergeUrl | null, onSelect: (url: AutomergeUrl) => void }) => {
   const repo = useRepo();
   const [rootDoc, changeRootDoc] = useDocument<RootDocument>(rootDocUrl);
@@ -357,7 +362,7 @@ const Sidebar = ({ rootDocUrl, selectedDocUrl, onSelect }: { rootDocUrl: Automer
               className={`outline-item ${url === selectedDocUrl ? 'active' : ''}`}
               onClick={() => onSelect(url as AutomergeUrl)}
             >
-              📄 <span>{url.slice(0, 8)}...</span>
+              📄 <DocumentTitle docUrl={url as AutomergeUrl} />
             </div>
           ))}
         </div>
