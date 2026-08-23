@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Star, Share, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
-  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle, History
+  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle,
+  History, MessageSquare // <-- Added MessageSquare
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -23,121 +24,24 @@ import { goOffline, goOnline } from './main';
 
 import './App.css';
 
-const HistoryDrawer = ({ 
-  docUrl, 
-  onClose,
-  selectedVersion,
-  onSelectVersion
-}: { 
-  docUrl: AutomergeUrl; 
-  onClose: () => void;
-  selectedVersion: string | null;
-  onSelectVersion: (hash: string) => void;
-}) => {
-  const [doc] = useDocument(docUrl);
+// --- Shared Identity Interface ---
+interface UserIdentity {
+  clientId: string;
+  color: string;
+  name: string;
+}
 
-  const history = useMemo(() => {
-    if (!doc) return [];
-    try {
-      const changes = A.getAllChanges(doc);
-      
-      // We will group changes that happen within 2 minutes of each other
-      const GROUPING_WINDOW_MS = 120000; 
-      const grouped = [];
-      let currentGroup: any = null;
-
-      changes.forEach((changeBytes) => {
-        const decoded = A.decodeChange(changeBytes);
-        const changeTime = decoded.time;
-        const author = `User ${decoded.actor.substring(0, 5)}`;
-
-        if (!currentGroup) {
-          currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
-        } else {
-          // If the same author typed again within the time window, cluster it!
-          if (currentGroup.author === author && (changeTime - currentGroup.time < GROUPING_WINDOW_MS)) {
-            currentGroup.id = decoded.hash; // Track the latest state of this burst
-            currentGroup.time = changeTime; // Update to the latest timestamp
-            currentGroup.count += 1;
-          } else {
-            // Time window closed or new author. Push the old group and start a new one.
-            grouped.push(currentGroup);
-            currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
-          }
-        }
-      });
-
-      if (currentGroup) grouped.push(currentGroup);
-
-      // Reverse it so newest clusters are at the top, and format the output
-      return grouped.reverse().map((item, idx) => ({
-        ...item,
-        displayTime: new Date(item.time).toLocaleString([], { 
-          month: 'short', day: 'numeric', 
-          hour: '2-digit', minute: '2-digit' 
-        }),
-        // Add a nice message showing how many keystrokes/changes were clustered
-        message: idx === grouped.length - 1 
-          ? "Created document" 
-          : (item.count > 1 ? `Made ${item.count} edits` : "Edited document")
-      }));
-
-    } catch (e) {
-      console.error("Failed to decode history", e);
-      return [];
-    }
-  }, [doc]);
-
-  return (
-    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', display: 'flex', flexDirection: 'column' }}>
-      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
-        <span className="font-semibold" style={{ fontSize: '14px' }}>Version History</span>
-        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
-      </div>
-      <div className="sidebar-content" style={{ padding: '8px', overflowY: 'auto', flex: 1 }}>
-        {history.length === 0 ? (
-          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>No history found.</div>
-        ) : (
-          history.map(item => (
-            <div 
-              key={item.id} 
-              onClick={() => onSelectVersion(item.id)}
-              style={{ 
-                padding: '12px', 
-                borderBottom: '1px solid var(--border-color)', 
-                cursor: 'pointer', 
-                transition: 'background 0.2s',
-                backgroundColor: selectedVersion === item.id ? 'var(--active-bg)' : 'transparent'
-              }} 
-            >
-              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.displayTime}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                <span className="text-muted text-sm">{item.author}</span>
-                <span className="text-muted text-sm" style={{ fontStyle: 'italic', fontSize: '11px' }}>{item.message}</span>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </aside>
-  );
-};
-
-const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
+const PresenceBar = ({ docUrl, clientId }: { docUrl: AutomergeUrl, clientId: string }) => {
   const handle = useDocHandle(docUrl);
   const [peerStatuses, setPeerStatuses] = useState<Record<string, boolean>>({});
   const [isOnline, setIsOnline] = useState(true);
-
-  // Generate a stable client ID for this session
-  const myClientId = useRef(Math.random().toString(36).substr(2, 9)).current;
 
   useEffect(() => {
     if (!handle) return;
 
     const onMessage = (msg: any) => {
       const data = msg.message;
-      // Listen for presence broadcast packets
-      if (data && data.type === 'presence' && data.clientId !== myClientId) {
+      if (data && data.type === 'presence' && data.clientId !== clientId) {
         setPeerStatuses(prev => ({
           ...prev,
           [data.clientId]: data.isOnline
@@ -149,22 +53,19 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
     return () => {
       handle.off("ephemeral-message", onMessage);
     };
-  }, [handle, myClientId]);
+  }, [handle, clientId]);
 
   const toggleConnection = () => {
     const nextState = !isOnline;
-    if (nextState) {
-      goOnline();
-    } else {
-      goOffline();
-    }
+    if (nextState) goOnline();
+    else goOffline();
+    
     setIsOnline(nextState);
 
-    // Broadcast our new connection state to all peers
     if (handle) {
       handle.broadcast({
         type: 'presence',
-        clientId: myClientId,
+        clientId: clientId,
         isOnline: nextState
       });
     }
@@ -172,7 +73,6 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
 
   return (
     <div className="presence-bar" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '16px', paddingRight: '8px', borderRight: '1px solid var(--border-color)', marginRight: '8px' }}>
-      
       <button 
         className={`status-badge ${isOnline ? 'online' : 'offline'}`} 
         onClick={toggleConnection}
@@ -191,8 +91,6 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
       <div className="friend-avatars" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span className="text-muted text-sm" style={{ fontSize: '12px' }}>Active:</span>
         <div className="avatar-cluster" style={{ display: 'flex', alignItems: 'center' }}>
-          
-          {/* Local User Avatar */}
           <div 
             className={`avatar ${!isOnline ? 'offline-avatar' : ''}`} 
             title="You (Local)" 
@@ -200,13 +98,11 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
           >
             Me
           </div>
-
-          {/* Remote Peer Avatars with status styling */}
-          {Object.entries(peerStatuses).map(([clientId, online], idx) => (
+          {Object.entries(peerStatuses).map(([id, online], idx) => (
             <div 
-              key={clientId} 
+              key={id} 
               className={`avatar remote ${!online ? 'offline-avatar' : ''}`} 
-              title={`Peer: ${clientId} (${online ? 'Online' : 'Offline'})`} 
+              title={`Peer: ${id} (${online ? 'Online' : 'Offline'})`} 
               style={{ fontSize: '10px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', backgroundColor: '#fbbc04', color: '#202124', border: '2px solid white', marginLeft: '-6px', zIndex: 9 - idx }}
             >
               {String.fromCharCode(65 + (idx % 26))}
@@ -214,7 +110,6 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
           ))}
         </div>
       </div>
-      
     </div>
   );
 };
@@ -224,13 +119,19 @@ const Header = ({
   onTitleChange, 
   selectedDocUrl,
   historyOpen,
-  onToggleHistory
+  onToggleHistory,
+  chatOpen,
+  onToggleChat,
+  identity
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   selectedDocUrl: AutomergeUrl | null;
   historyOpen: boolean;
   onToggleHistory: () => void;
+  chatOpen: boolean;
+  onToggleChat: () => void;
+  identity: UserIdentity;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -266,9 +167,16 @@ const Header = ({
         </div>
       </div>
       <div className="header-actions">
-        {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} />}
+        {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} clientId={identity.clientId} />}
         
-        {/* NEW: History Toggle Button */}
+        <button 
+          className={`icon-btn ${chatOpen ? 'active' : ''}`} 
+          onClick={onToggleChat} 
+          title="Open Chat"
+        >
+          <MessageSquare size={18} />
+        </button>
+
         <button 
           className={`icon-btn ${historyOpen ? 'active' : ''}`} 
           onClick={onToggleHistory} 
@@ -280,7 +188,9 @@ const Header = ({
         <button className="share-btn" onClick={handleShareClick}>
           <Share size={16} /> {copied ? "Copied!" : "Share"}
         </button>
-        <div className="avatar">D</div>
+        <div className="avatar" style={{ backgroundColor: identity.color }}>
+          {identity.name.charAt(0)}
+        </div>
       </div>
     </header>
   );
@@ -295,6 +205,8 @@ const isMarkActive = (state: EditorState | null, markType: any) => {
 
 const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: EditorState | null }) => {
   const activeSchema = editorState?.schema;
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [questionText, setQuestionText] = useState("");
 
   const applyMark = (markName: string) => {
     if (!view || !activeSchema || !activeSchema.marks[markName]) return;
@@ -313,28 +225,25 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
     view.focus();
   };
 
-  const insertQuestionBlock = () => {
-    if (!view || !activeSchema) return;
-    const question = window.prompt("Enter the question you want to lock:");
-    if (!question) return;
+  const handleInsertQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPromptOpen(false);
+    
+    if (!view || !activeSchema || !questionText.trim()) return;
 
     const { state, dispatch } = view;
-    
-    // 1. Create the text and paragraph for the question
-    const textNode = activeSchema.text("Q: " + question);
+    const textNode = activeSchema.text("Q: " + questionText.trim());
     const paragraphNode = activeSchema.nodes.paragraph.create(null, textNode);
     const questionNode = activeSchema.nodes.blockquote.create(null, paragraphNode);
-    
-    // 2. Create an empty paragraph to go below it
     const emptyParagraph = activeSchema.nodes.paragraph.create();
     
-    // 3. Insert BOTH the locked question and the empty paragraph at the cursor
     if (questionNode && emptyParagraph) {
       const tr = state.tr.insert(state.selection.head, [questionNode, emptyParagraph]);
       dispatch(tr);
       view.focus();
     }
   };
+
   const boldActive = activeSchema && activeSchema.marks.strong ? isMarkActive(editorState, activeSchema.marks.strong) : false;
   const italicActive = activeSchema && activeSchema.marks.em ? isMarkActive(editorState, activeSchema.marks.em) : false;
 
@@ -345,47 +254,69 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
   }
 
   return (
-    <div className="docs-toolbar">
-      <div className="toolbar-group">
-        <button className="icon-btn"><Search size={16} /></button>
-        <button className="icon-btn" onClick={() => view && undo(view.state, view.dispatch)}><Undo size={16} /></button>
-        <button className="icon-btn" onClick={() => view && redo(view.state, view.dispatch)}><Redo size={16} /></button>
-        <button className="icon-btn"><Printer size={16} /></button>
+    <>
+      <div className="docs-toolbar">
+        <div className="toolbar-group">
+          <button className="icon-btn"><Search size={16} /></button>
+          <button className="icon-btn" onClick={() => view && undo(view.state, view.dispatch)}><Undo size={16} /></button>
+          <button className="icon-btn" onClick={() => view && redo(view.state, view.dispatch)}><Redo size={16} /></button>
+          <button className="icon-btn"><Printer size={16} /></button>
+        </div>
+        <div className="toolbar-divider" />
+        <div className="toolbar-group">
+          <select className="toolbar-select" value={currentBlock} onChange={handleBlockTypeChange}>
+            <option value="0">Normal text</option>
+            <option value="1">Heading 1</option>
+            <option value="2">Heading 2</option>
+            <option value="3">Heading 3</option>
+          </select>
+          <select className="toolbar-select"><option value="Arial">Arial</option></select>
+        </div>
+        <div className="toolbar-divider" />
+        <div className="toolbar-group">
+          <button className={`icon-btn ${boldActive ? 'active' : ''}`} onClick={() => applyMark('strong')}><Bold size={16} /></button>
+          <button className={`icon-btn ${italicActive ? 'active' : ''}`} onClick={() => applyMark('em')}><Italic size={16} /></button>
+          <button className="icon-btn"><Underline size={16} /></button>
+        </div>
+        <div className="toolbar-divider" />
+        <div className="toolbar-group">
+          <button className="icon-btn"><AlignLeft size={16} /></button>
+          <button className="icon-btn"><AlignCenter size={16} /></button>
+          <button className="icon-btn"><AlignRight size={16} /></button>
+        </div>
+        <div className="toolbar-divider" />
+        <div className="toolbar-group">
+          <button 
+            className="icon-btn" 
+            onClick={() => { setQuestionText(""); setPromptOpen(true); }} 
+            title="Insert Locked Question"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', width: 'auto' }}
+          >
+            <HelpCircle size={16} /> Insert Question
+          </button>
+        </div>
       </div>
-      <div className="toolbar-divider" />
-      <div className="toolbar-group">
-        <select className="toolbar-select" value={currentBlock} onChange={handleBlockTypeChange}>
-          <option value="0">Normal text</option>
-          <option value="1">Heading 1</option>
-          <option value="2">Heading 2</option>
-          <option value="3">Heading 3</option>
-        </select>
-        <select className="toolbar-select"><option value="Arial">Arial</option></select>
-      </div>
-      <div className="toolbar-divider" />
-      <div className="toolbar-group">
-        <button className={`icon-btn ${boldActive ? 'active' : ''}`} onClick={() => applyMark('strong')}><Bold size={16} /></button>
-        <button className={`icon-btn ${italicActive ? 'active' : ''}`} onClick={() => applyMark('em')}><Italic size={16} /></button>
-        <button className="icon-btn"><Underline size={16} /></button>
-      </div>
-      <div className="toolbar-divider" />
-      <div className="toolbar-group">
-        <button className="icon-btn"><AlignLeft size={16} /></button>
-        <button className="icon-btn"><AlignCenter size={16} /></button>
-        <button className="icon-btn"><AlignRight size={16} /></button>
-      </div>
-      <div className="toolbar-divider" />
-      <div className="toolbar-group">
-        <button 
-          className="icon-btn" 
-          onClick={insertQuestionBlock} 
-          title="Insert Locked Question"
-          style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', width: 'auto' }}
-        >
-          <HelpCircle size={16} /> Insert Question
-        </button>
-      </div>
-    </div>
+
+      {promptOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <form 
+            onSubmit={handleInsertQuestion} 
+            style={{ backgroundColor: 'white', padding: '24px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '16px', width: '300px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+          >
+            <label style={{ fontWeight: 600, fontSize: '14px', color: '#202124' }}>Enter the question you want to lock:</label>
+            <input 
+              type="text" autoFocus value={questionText} 
+              onChange={e => setQuestionText(e.target.value)} 
+              style={{ padding: '8px', borderRadius: '4px', border: '1px solid #dadce0', fontSize: '14px', outline: 'none' }} 
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button type="button" onClick={() => setPromptOpen(false)} style={{ padding: '6px 12px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#5f6368', fontWeight: 600 }}>Cancel</button>
+              <button type="submit" style={{ padding: '6px 12px', border: 'none', background: '#1a73e8', color: 'white', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>Insert</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -394,15 +325,7 @@ const DocumentTitle = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   return <span>{doc?.title || "Untitled document"}</span>;
 };
 
-const Sidebar = ({ 
-  rootDocUrl, 
-  selectedDocUrl, 
-  onSelect 
-}: { 
-  rootDocUrl: AutomergeUrl, 
-  selectedDocUrl: AutomergeUrl | null, 
-  onSelect: (url: AutomergeUrl) => void 
-}) => {
+const Sidebar = ({ rootDocUrl, selectedDocUrl, onSelect }: { rootDocUrl: AutomergeUrl, selectedDocUrl: AutomergeUrl | null, onSelect: (url: AutomergeUrl) => void }) => {
   const repo = useRepo();
   const [rootDoc, changeRootDoc] = useDocument<RootDocument>(rootDocUrl);
   const documents = rootDoc?.documents || [];
@@ -411,9 +334,7 @@ const Sidebar = ({
     if (selectedDocUrl) {
       changeRootDoc((d) => {
         if (!d.documents) d.documents = [];
-        if (!d.documents.includes(selectedDocUrl)) {
-          d.documents.push(selectedDocUrl);
-        }
+        if (!d.documents.includes(selectedDocUrl)) d.documents.push(selectedDocUrl);
       });
     }
   }, [selectedDocUrl, changeRootDoc]);
@@ -450,8 +371,156 @@ const Sidebar = ({
   );
 };
 
-const cursorPluginKey = new PluginKey('cursors');
+// --- Custom Drawers (History & Chat) ---
+const HistoryDrawer = ({ docUrl, onClose, selectedVersion, onSelectVersion }: { docUrl: AutomergeUrl; onClose: () => void; selectedVersion: string | null; onSelectVersion: (hash: string) => void; }) => {
+  const [doc] = useDocument(docUrl);
+  const history = useMemo(() => {
+    if (!doc) return [];
+    try {
+      const changes = A.getAllChanges(doc);
+      const GROUPING_WINDOW_MS = 120000; 
+      const grouped: any[] = [];
+      let currentGroup: any = null;
 
+      changes.forEach((changeBytes) => {
+        const decoded = A.decodeChange(changeBytes);
+        const changeTime = decoded.time;
+        const author = `User ${decoded.actor.substring(0, 5)}`;
+
+        if (!currentGroup) {
+          currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+        } else {
+          if (currentGroup.author === author && (changeTime - currentGroup.time < GROUPING_WINDOW_MS)) {
+            currentGroup.id = decoded.hash; 
+            currentGroup.time = changeTime; 
+            currentGroup.count += 1;
+          } else {
+            grouped.push(currentGroup);
+            currentGroup = { id: decoded.hash, time: changeTime, author, count: 1 };
+          }
+        }
+      });
+      if (currentGroup) grouped.push(currentGroup);
+
+      return grouped.reverse().map((item, idx) => ({
+        ...item,
+        displayTime: new Date(item.time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        message: idx === grouped.length - 1 ? "Created document" : (item.count > 1 ? `Made ${item.count} edits` : "Edited document")
+      }));
+    } catch (e) {
+      return [];
+    }
+  }, [doc]);
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', display: 'flex', flexDirection: 'column' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Version History</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div className="sidebar-content" style={{ padding: '8px', overflowY: 'auto', flex: 1 }}>
+        {history.length === 0 ? (
+          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>No history found.</div>
+        ) : (
+          history.map(item => (
+            <div 
+              key={item.id} 
+              onClick={() => onSelectVersion(item.id)}
+              style={{ 
+                padding: '12px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.2s',
+                backgroundColor: selectedVersion === item.id ? 'var(--active-bg)' : 'transparent'
+              }} 
+            >
+              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.displayTime}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                <span className="text-muted text-sm">{item.author}</span>
+                <span className="text-muted text-sm" style={{ fontStyle: 'italic', fontSize: '11px' }}>{item.message}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+};
+
+const ChatDrawer = ({ docUrl, onClose, identity }: { docUrl: AutomergeUrl, onClose: () => void, identity: UserIdentity }) => {
+  const [doc, changeDoc] = useDocument<any>(docUrl);
+  const [msg, setMsg] = useState("");
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [doc?.chat]);
+
+  const handleSend = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!msg.trim()) return;
+
+    changeDoc((d: any) => {
+      if (!d.chat) d.chat = [];
+      d.chat.push({
+        id: Math.random().toString(36).substr(2, 9),
+        senderId: identity.clientId,
+        senderName: identity.name,
+        color: identity.color,
+        text: msg,
+        time: Date.now()
+      });
+    });
+    setMsg("");
+  };
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', display: 'flex', flexDirection: 'column', backgroundColor: '#f9fbfd' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', backgroundColor: 'white' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Team Chat</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {doc?.chat?.length ? doc.chat.map((c: any) => {
+          const isMe = c.senderId === identity.clientId;
+          return (
+            <div key={c.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
+              <span style={{ fontSize: '10px', color: 'gray', marginBottom: '2px', marginLeft: '4px', marginRight: '4px' }}>
+                {c.senderName}
+              </span>
+              <div style={{
+                backgroundColor: isMe ? '#1a73e8' : 'white',
+                color: isMe ? 'white' : '#202124',
+                padding: '8px 12px',
+                borderRadius: '16px',
+                borderBottomRightRadius: isMe ? '4px' : '16px',
+                borderBottomLeftRadius: isMe ? '16px' : '4px',
+                fontSize: '13px',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                maxWidth: '90%',
+                wordBreak: 'break-word'
+              }}>
+                {c.text}
+              </div>
+            </div>
+          );
+        }) : (
+          <div className="text-muted text-sm" style={{ textAlign: 'center', marginTop: '20px' }}>No messages yet. Say hi!</div>
+        )}
+        <div ref={endRef} />
+      </div>
+      <form onSubmit={handleSend} style={{ padding: '16px', backgroundColor: 'white', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px' }}>
+        <input
+          type="text" value={msg} onChange={e => setMsg(e.target.value)} placeholder="Type a message..."
+          style={{ flex: 1, padding: '8px 12px', borderRadius: '20px', border: '1px solid #dadce0', fontSize: '13px', outline: 'none' }}
+        />
+        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '20px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+          Send
+        </button>
+      </form>
+    </aside>
+  );
+};
+
+// --- ProseMirror Plugins ---
+const cursorPluginKey = new PluginKey('cursors');
 const cursorPlugin = () => new Plugin({
   key: cursorPluginKey,
   state: {
@@ -459,9 +528,7 @@ const cursorPlugin = () => new Plugin({
     apply(tr, pluginState) {
       const meta = tr.getMeta(cursorPluginKey);
       let { cursors } = pluginState;
-      if (meta) {
-        cursors = { ...cursors, [meta.clientId]: meta };
-      }
+      if (meta) cursors = { ...cursors, [meta.clientId]: meta };
       return { cursors };
     }
   },
@@ -474,13 +541,10 @@ const cursorPlugin = () => new Plugin({
       Object.values(cursors).forEach((c: any) => {
         const safeHead = Math.max(0, Math.min(c.head, docSize));
         const safeAnchor = Math.max(0, Math.min(c.anchor, docSize));
-        
         if (safeHead !== safeAnchor) {
           const from = Math.min(safeHead, safeAnchor);
           const to = Math.max(safeHead, safeAnchor);
-          decos.push(Decoration.inline(from, to, {
-            style: `background-color: ${c.color}40;` 
-          }));
+          decos.push(Decoration.inline(from, to, { style: `background-color: ${c.color}40;` }));
         }
         
         const widget = document.createElement('span');
@@ -495,42 +559,68 @@ const cursorPlugin = () => new Plugin({
         widget.appendChild(flag);
         decos.push(Decoration.widget(safeHead, widget, { side: 1 }));
       });
-      
       return DecorationSet.create(state.doc, decos);
     }
   }
 });
 
+const diffPluginKey = new PluginKey('diffHighlight');
+const diffPlugin = (initialRanges: any[]) => new Plugin({
+  key: diffPluginKey,
+  state: {
+    init: (config, state) => {
+      if (!initialRanges || initialRanges.length === 0) return DecorationSet.empty;
+      const decos: Decoration[] = [];
+      const docSize = state.doc.content.size;
+      initialRanges.forEach((r: any) => {
+        const safeStart = Math.max(1, Math.min(r.start, docSize - 1));
+        const safeEnd = Math.max(safeStart + 1, Math.min(r.end, docSize - 1));
+        if (safeStart < safeEnd) {
+          decos.push(Decoration.inline(safeStart, safeEnd, { class: 'author-highlight', style: `--author-color: ${r.color}` }));
+        }
+      });
+      return DecorationSet.create(state.doc, decos);
+    },
+    apply: (tr, oldSet) => {
+      const diffData = tr.getMeta(diffPluginKey);
+      if (diffData) {
+        const decos: Decoration[] = [];
+        const docSize = tr.doc.content.size;
+        diffData.ranges.forEach((r: any) => {
+          const safeStart = Math.max(1, Math.min(r.start, docSize - 1));
+          const safeEnd = Math.max(safeStart + 1, Math.min(r.end, docSize - 1));
+          if (safeStart < safeEnd) {
+            decos.push(Decoration.inline(safeStart, safeEnd, { class: 'author-highlight', style: `--author-color: ${r.color}` }));
+          }
+        });
+        return DecorationSet.create(tr.doc, decos);
+      }
+      return oldSet.map(tr.mapping, tr.doc);
+    }
+  },
+  props: { decorations(state) { return diffPluginKey.getState(state); } }
+});
+
 const ProseMirrorEditor = ({ 
-  docUrl, 
-  onViewCreated,
-  onStateChange
+  docUrl, onViewCreated, onStateChange, highlightRanges = [], identity
 }: { 
-  docUrl: AutomergeUrl;
-  onViewCreated: (view: EditorView | null) => void;
-  onStateChange: (state: EditorState) => void;
+  docUrl: AutomergeUrl; onViewCreated: (view: EditorView | null) => void; onStateChange: (state: EditorState) => void; highlightRanges?: { start: number, end: number, color: string }[]; identity: UserIdentity;
 }) => {
   const editorRoot = useRef<HTMLDivElement>(null);
   const handle = useDocHandle<{ text: string }>(docUrl);
   const [loaded, setLoaded] = useState(false);
+  
+  const { clientId: myClientId, color: myColor, name: myName } = identity;
 
-  const myClientId = useRef(Math.random().toString(36).substr(2, 9)).current;
-  const myColor = useRef(['#ff5722', '#4caf50', '#2196f3', '#e91e63', '#9c27b0'][Math.floor(Math.random() * 5)]).current;
-  const myName = useRef(`User ${Math.floor(Math.random() * 1000)}`).current;
-
-  // Safe promise handling block
   useEffect(() => {
     if (!handle) return;
-    handle.whenReady().then(() => {
-      setLoaded(true);
-    });
+    handle.whenReady().then(() => setLoaded(true));
   }, [handle]);
 
   useEffect(() => {
     if (!editorRoot.current || !loaded || !handle) return;
     const { pmDoc, schema, plugin } = init(handle, ["text"]);
 
-    // Locked Question Plugin
     const lockedQuestionPlugin = new Plugin({
       key: new PluginKey('lockedQuestion'),
       props: {
@@ -538,10 +628,7 @@ const ProseMirrorEditor = ({
           const decos: Decoration[] = [];
           state.doc.descendants((node, pos) => {
             if (node.type.name === 'blockquote') {
-              decos.push(Decoration.node(pos, pos + node.nodeSize, {
-                contenteditable: 'false',
-                class: 'locked-question-block'
-              }));
+              decos.push(Decoration.node(pos, pos + node.nodeSize, { contenteditable: 'false', class: 'locked-question-block' }));
             }
           });
           return DecorationSet.create(state.doc, decos);
@@ -558,7 +645,8 @@ const ProseMirrorEditor = ({
         keymap(baseKeymap),
         plugin,
         cursorPlugin(),
-        lockedQuestionPlugin // Injected here
+        lockedQuestionPlugin,
+        diffPlugin(highlightRanges) 
       ]
     });
 
@@ -570,14 +658,7 @@ const ProseMirrorEditor = ({
         onStateChange(newState);
 
         if (transaction.selectionSet) {
-          handle.broadcast({
-            type: 'cursor',
-            clientId: myClientId,
-            head: newState.selection.head, 
-            anchor: newState.selection.anchor, 
-            name: myName,
-            color: myColor
-          });
+          handle.broadcast({ type: 'cursor', clientId: myClientId, head: newState.selection.head, anchor: newState.selection.anchor, name: myName, color: myColor });
         }
       }
     });
@@ -604,25 +685,58 @@ const ProseMirrorEditor = ({
   return <div ref={editorRoot} className="prosemirror-mount" />;
 };
 
+// --- Diffing Utilities ---
+const getRawText = (obj: any): string => {
+  if (!obj) return "";
+  if (typeof obj === 'string') return obj;
+  if (Array.isArray(obj)) return obj.map(getRawText).join('');
+  if (obj.type === 'text') return obj.text || "";
+  if (obj.content) return getRawText(obj.content);
+  return " "; 
+};
+
+const computeSimpleDiff = (oldStr: string, newStr: string, color: string) => {
+  if (!oldStr) oldStr = "";
+  if (!newStr) newStr = "";
+  let start = 0;
+  while (start < oldStr.length && start < newStr.length && oldStr[start] === newStr[start]) start++;
+  let oldEnd = oldStr.length - 1;
+  let newEnd = newStr.length - 1;
+  while (oldEnd >= start && newEnd >= start && oldStr[oldEnd] === newStr[newEnd]) {
+    oldEnd--;
+    newEnd--;
+  }
+  if (newEnd >= start) return [{ start: Math.max(1, start), end: newEnd + 3, color }];
+  return [];
+};
+
+
+// --- Main Application ---
 export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
   
-  // --- Time Travel States ---
+  // Create ONE unified identity for Chat, Cursors, and Presence
+  const myIdentity = useRef({
+    clientId: Math.random().toString(36).substr(2, 9),
+    color: ['#ff5722', '#4caf50', '#2196f3', '#e91e63', '#9c27b0'][Math.floor(Math.random() * 5)],
+    name: `User ${Math.floor(Math.random() * 1000)}`
+  }).current;
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  
   const [timeTravelUrl, setTimeTravelUrl] = useState<AutomergeUrl | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [diffRanges, setDiffRanges] = useState<{ start: number, end: number, color: string }[]>([]);
   
   const repo = useRepo();
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
-  const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
-    ? (cleanHash as AutomergeUrl) 
-    : null;
+  const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) ? (cleanHash as AutomergeUrl) : null;
 
-  // We need direct access to the handle to view historical states
   const handle = useDocHandle(selectedDocUrl ?? undefined);
-  const [doc, changeDoc] = useDocument<{ title?: string, text: string }>(selectedDocUrl || "" as AutomergeUrl);
+  const [doc, changeDoc] = useDocument<{ title?: string, text: string, chat?: any[] }>(selectedDocUrl || "" as AutomergeUrl);
   
   const title = doc?.title || "Untitled document";
 
@@ -630,25 +744,41 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
     if (selectedDocUrl && !selectedVersion) changeDoc((d) => { d.title = e.target.value; });
   };
 
-  // --- The Time Machine Logic ---
-  // --- The Time Machine Logic ---
+  const toggleHistory = () => {
+    setHistoryOpen(!historyOpen);
+    if (!historyOpen) setChatOpen(false); 
+  };
+
+  const toggleChat = () => {
+    setChatOpen(!chatOpen);
+    if (!chatOpen) setHistoryOpen(false); 
+  };
+
   const handleTimeTravel = (versionHash: string) => {
     const currentDoc = handle?.docSync();
     if (!currentDoc) return;
 
     try {
-      // 1. Ask Automerge to rewind the document to this exact moment
-      const oldDoc = A.view(currentDoc, [versionHash]);
+      const targetDoc = A.view(currentDoc, [versionHash]);
+      const historyHeads = A.getHistory(currentDoc);
       
-      // 2. Create a blank temporary document in the repo
+      const currentIndex = historyHeads.findIndex(h => h.change.hash === versionHash);
+      const previousHash = currentIndex > 0 ? historyHeads[currentIndex - 1].change.hash : null;
+      const prevDoc = previousHash ? A.view(currentDoc, [previousHash]) : null;
+
+      const newTextObj = (targetDoc as any).text;
+      const oldTextObj = prevDoc ? (prevDoc as any).text : "";
+      const newText = newTextObj ? newTextObj.toString() : "";
+      const oldText = oldTextObj ? oldTextObj.toString() : "";
+      
+      const ranges = computeSimpleDiff(oldText, newText, "#9c27b0"); 
+      
       const tempHandle = repo.create();
+      tempHandle.update(() => A.clone(targetDoc));
       
-      // 3. Safely inject the cloned historical state (preserves all formatting!)
-      tempHandle.update(() => A.clone(oldDoc));
-      
-      // 4. Point our editor to the temporary document
       setTimeTravelUrl(tempHandle.url);
       setSelectedVersion(versionHash);
+      setDiffRanges(ranges);
     } catch (e) {
       console.error("Failed to travel back in time:", e);
     }
@@ -657,6 +787,7 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const exitTimeTravel = () => {
     setTimeTravelUrl(null);
     setSelectedVersion(null);
+    setDiffRanges([]); 
   };
 
   return (
@@ -666,7 +797,10 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         onTitleChange={handleTitleChange} 
         selectedDocUrl={selectedDocUrl}
         historyOpen={historyOpen}
-        onToggleHistory={() => setHistoryOpen(!historyOpen)}
+        onToggleHistory={toggleHistory}
+        chatOpen={chatOpen}
+        onToggleChat={toggleChat}
+        identity={myIdentity}
       />
       <Toolbar view={editorView} editorState={editorState} />
       
@@ -677,25 +811,14 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
           onSelect={(url) => { setHash(url); exitTimeTravel(); }} 
         />
         
-        {/* NEW: Wrapper to stack the banner and editor vertically */}
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-          
-          {/* Time Travel Warning Banner */}
           {selectedVersion && (
             <div style={{ backgroundColor: '#fef7e0', padding: '12px 24px', borderBottom: '1px solid #f2c75c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ color: '#b06000', fontWeight: 600, fontSize: '14px' }}>
-                Viewing a historical version of this document.
-              </span>
-              <button 
-                onClick={exitTimeTravel} 
-                style={{ background: '#b06000', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}
-              >
-                Return to Current
-              </button>
+              <span style={{ color: '#b06000', fontWeight: 600, fontSize: '14px' }}>Viewing a historical version of this document.</span>
+              <button onClick={exitTimeTravel} style={{ background: '#b06000', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}>Return to Current</button>
             </div>
           )}
 
-          {/* The original editor container takes the remaining height */}
           <section className="editor-container" style={{ flex: 1, overflowY: 'auto' }}>
             <div className="document-page">
               {selectedDocUrl ? (
@@ -705,25 +828,24 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
                     docUrl={timeTravelUrl || selectedDocUrl} 
                     onViewCreated={setEditorView}
                     onStateChange={setEditorState}
+                    highlightRanges={diffRanges}
+                    identity={myIdentity}
                   />
                 </div>
               ) : (
-                <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
-                  Select or create a document to begin editing.
-                </div>
+                <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>Select or create a document to begin editing.</div>
               )}
             </div>
           </section>
         </div>
         
-        {/* Version History Sidebar */}
+        {/* Render mutually exclusive drawers */}
         {selectedDocUrl && historyOpen && (
-          <HistoryDrawer 
-            docUrl={selectedDocUrl} 
-            onClose={() => setHistoryOpen(false)} 
-            selectedVersion={selectedVersion}
-            onSelectVersion={handleTimeTravel}
-          />
+          <HistoryDrawer docUrl={selectedDocUrl} onClose={() => setHistoryOpen(false)} selectedVersion={selectedVersion} onSelectVersion={handleTimeTravel} />
+        )}
+        
+        {selectedDocUrl && chatOpen && (
+          <ChatDrawer docUrl={selectedDocUrl} onClose={() => setChatOpen(false)} identity={myIdentity} />
         )}
       </main>
     </div>
