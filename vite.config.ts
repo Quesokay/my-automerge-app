@@ -1,17 +1,20 @@
-import { defineConfig } from "vite"
-import react from "@vitejs/plugin-react"
-import wasm from "vite-plugin-wasm"
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import wasm from 'vite-plugin-wasm'
 
 export default defineConfig({
-  // customize this to your repo name for github pages deploy
-  base: "/",
-
-  build: { target: "esnext" },
-
-  plugins: [wasm(), react()],
-
-  worker: {
-    format: "es",
-    plugins: () => [wasm()],
+  plugins: [
+    react(),
+    wasm() // Handles the binary streaming safely
+  ],
+  base: './', 
+  build: {
+    target: 'esnext', // Natively handles top-level await! No extra plugins needed.
+    rollupOptions: {
+      external: ['hyperswarm', 'b4a', 'hypercore-crypto']
+    }
   },
+  optimizeDeps: {
+    exclude: ['hyperswarm', 'b4a', 'hypercore-crypto']
+  }
 })

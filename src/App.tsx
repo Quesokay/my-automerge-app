@@ -122,7 +122,9 @@ const Header = ({
   onToggleHistory,
   chatOpen,
   onToggleChat,
-  identity
+  identity,
+  lobbyOpen,
+  onToggleLobby,
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -132,6 +134,8 @@ const Header = ({
   chatOpen: boolean;
   onToggleChat: () => void;
   identity: UserIdentity;
+  lobbyOpen: boolean; // <-- ADDED
+  onToggleLobby: () => void;
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -168,7 +172,13 @@ const Header = ({
       </div>
       <div className="header-actions">
         {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} clientId={identity.clientId} />}
-        
+        <button 
+          className={`share-btn ${lobbyOpen ? 'active' : ''}`} 
+          onClick={onToggleLobby} 
+          style={{ background: '#34a853' }}
+        >
+          Lobby
+        </button>
         <button 
           className={`icon-btn ${chatOpen ? 'active' : ''}`} 
           onClick={onToggleChat} 
@@ -317,6 +327,69 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
         </div>
       )}
     </>
+  );
+};
+
+const LobbyDrawer = ({ identity, onClose }: { identity: UserIdentity, onClose: () => void }) => {
+  const [activePeers, setActivePeers] = useState<Record<string, UserIdentity>>({});
+
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:3031');
+    
+    ws.onopen = () => {
+      // Announce our identity to the public swarm
+      ws.send(JSON.stringify({ type: 'lobby-presence', identity }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        // If someone new announces themselves, save them and echo back our identity
+        if (data.type === 'lobby-presence' && data.identity.clientId !== identity.clientId) {
+          setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
+          ws.send(JSON.stringify({ type: 'lobby-presence-reply', identity }));
+        }
+        
+        // If someone replies to our announcement, save them
+        if (data.type === 'lobby-presence-reply' && data.identity.clientId !== identity.clientId) {
+          setActivePeers(prev => ({ ...prev, [data.identity.clientId]: data.identity }));
+        }
+      } catch (e) {
+        // Ignore non-JSON or Automerge sync messages for now
+      }
+    };
+
+    return () => ws.close();
+  }, [identity]);
+
+  return (
+    <aside className="docs-sidebar" style={{ borderLeft: '1px solid var(--border-color)', width: '300px', backgroundColor: '#f9fbfd' }}>
+      <div className="sidebar-header" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', borderBottom: '1px solid var(--border-color)' }}>
+        <span className="font-semibold" style={{ fontSize: '14px' }}>Public Lobby</span>
+        <button onClick={onClose} className="icon-btn" style={{ fontSize: '12px' }}>✕</button>
+      </div>
+      <div style={{ padding: '16px', flex: 1, overflowY: 'auto' }}>
+        <p style={{ fontSize: '12px', color: '#5f6368', marginBottom: '16px' }}>Discovering peers on Hyperswarm...</p>
+        
+        {Object.values(activePeers).map(peer => (
+          <div key={peer.clientId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', backgroundColor: 'white', borderRadius: '8px', marginBottom: '8px', border: '1px solid #dadce0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: peer.color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                {peer.name.charAt(0)}
+              </div>
+              <span style={{ fontSize: '13px', fontWeight: 600 }}>{peer.name}</span>
+            </div>
+            <button style={{ padding: '6px 12px', backgroundColor: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}>
+              Invite
+            </button>
+          </div>
+        ))}
+        {Object.keys(activePeers).length === 0 && (
+          <div style={{ textAlign: 'center', color: '#80868b', fontSize: '13px', marginTop: '24px' }}>No one else is here yet.</div>
+        )}
+      </div>
+    </aside>
   );
 };
 
@@ -659,7 +732,7 @@ const diffPluginKey = new PluginKey('diffHighlight');
 const diffPlugin = (initialRanges: any[]) => new Plugin({
   key: diffPluginKey,
   state: {
-    init: (config, state) => {
+    init: (_config, state) => {
       if (!initialRanges || initialRanges.length === 0) return DecorationSet.empty;
       const decos: Decoration[] = [];
       const docSize = state.doc.content.size;
@@ -825,7 +898,7 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) ? (cleanHash as AutomergeUrl) : null;
-
+  const [lobbyOpen, setLobbyOpen] = useState(false);
   const handle = useDocHandle(selectedDocUrl ?? undefined);
   const [doc, changeDoc] = useDocument<{ title?: string, text: string, chat?: any[] }>(selectedDocUrl || "" as AutomergeUrl);
   
@@ -837,13 +910,19 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
 
   const toggleHistory = () => {
     setHistoryOpen(!historyOpen);
-    if (!historyOpen) setChatOpen(false); 
+    if (!historyOpen) { setChatOpen(false); setLobbyOpen(false); }
   };
 
   const toggleChat = () => {
     setChatOpen(!chatOpen);
-    if (!chatOpen) setHistoryOpen(false); 
+    if (!chatOpen) { setHistoryOpen(false); setLobbyOpen(false); }
   };
+
+  const toggleLobby = () => {
+    setLobbyOpen(!lobbyOpen);
+    if (!lobbyOpen) { setHistoryOpen(false); setChatOpen(false); }
+  };
+
 
   const handleTimeTravel = (versionHash: string) => {
     const currentDoc = handle?.docSync();
@@ -892,6 +971,8 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         chatOpen={chatOpen}
         onToggleChat={toggleChat}
         identity={myIdentity}
+        lobbyOpen={lobbyOpen}     
+        onToggleLobby={toggleLobby}
       />
       <Toolbar view={editorView} editorState={editorState} />
       
@@ -937,6 +1018,9 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         
         {selectedDocUrl && chatOpen && (
           <ChatDrawer docUrl={selectedDocUrl} onClose={() => setChatOpen(false)} identity={myIdentity} />
+        )}
+        {lobbyOpen && (
+          <LobbyDrawer identity={myIdentity} onClose={() => setLobbyOpen(false)} />
         )}
       </main>
     </div>
