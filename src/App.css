@@ -350,3 +350,23 @@ body {
   filter: grayscale(100%);
   border-color: #ea4335 !important;
 }
+
+/* --- Locked Question Block --- */
+.locked-question-block {
+  background-color: var(--active-bg);
+  border-left: 4px solid var(--active-text);
+  padding: 16px;
+  margin: 16px 0;
+  border-radius: 0 8px 8px 0;
+  font-weight: 600;
+  color: var(--active-text);
+  
+  /* These properties prevent the user from clicking into the block */
+  user-select: none;
+  pointer-events: none; 
+}
+
+/* Ensure empty paragraphs below it act normally */
+.ProseMirror p {
+  min-height: 1.2em;
+}

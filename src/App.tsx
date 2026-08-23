@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Star, Share, MessageSquare, Video, Search, 
+  Star, Share, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
-  AlignLeft, AlignCenter, AlignRight, FileText, Send
+  AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -18,7 +18,6 @@ import { useRepo, useDocument, useDocHandle } from "@automerge/automerge-repo-re
 import { init } from "@automerge/prosemirror";
 import { useHash } from "react-use";
 import { RootDocument } from "./rootDoc";
-
 import { goOffline, goOnline } from './main';
 
 import './App.css';
@@ -110,18 +109,13 @@ const PresenceBar = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   );
 };
 
-// 2. Update Header to accept docUrl and render PresenceBar
 const Header = ({ 
   title, 
   onTitleChange, 
-  onToggleChat, 
-  chatOpen,
   selectedDocUrl
 }: { 
   title: string; 
   onTitleChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onToggleChat: () => void;
-  chatOpen: boolean;
   selectedDocUrl: AutomergeUrl | null;
 }) => {
   const [copied, setCopied] = useState(false);
@@ -158,13 +152,7 @@ const Header = ({
         </div>
       </div>
       <div className="header-actions">
-        {/* Render Presence bar if a document is active */}
         {selectedDocUrl && <PresenceBar docUrl={selectedDocUrl} />}
-
-        <button className={`icon-btn ${chatOpen ? 'active' : ''}`} onClick={onToggleChat} title="Toggle Chat">
-          <MessageSquare size={18} />
-        </button>
-        <button className="icon-btn"><Video size={18} /></button>
         <button className="share-btn" onClick={handleShareClick}>
           <Share size={16} /> {copied ? "Copied!" : "Share"}
         </button>
@@ -201,6 +189,28 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
     view.focus();
   };
 
+  const insertQuestionBlock = () => {
+    if (!view || !activeSchema) return;
+    const question = window.prompt("Enter the question you want to lock:");
+    if (!question) return;
+
+    const { state, dispatch } = view;
+    
+    // 1. Create the text and paragraph for the question
+    const textNode = activeSchema.text("Q: " + question);
+    const paragraphNode = activeSchema.nodes.paragraph.create(null, textNode);
+    const questionNode = activeSchema.nodes.blockquote.create(null, paragraphNode);
+    
+    // 2. Create an empty paragraph to go below it
+    const emptyParagraph = activeSchema.nodes.paragraph.create();
+    
+    // 3. Insert BOTH the locked question and the empty paragraph at the cursor
+    if (questionNode && emptyParagraph) {
+      const tr = state.tr.insert(state.selection.head, [questionNode, emptyParagraph]);
+      dispatch(tr);
+      view.focus();
+    }
+  };
   const boldActive = activeSchema && activeSchema.marks.strong ? isMarkActive(editorState, activeSchema.marks.strong) : false;
   const italicActive = activeSchema && activeSchema.marks.em ? isMarkActive(editorState, activeSchema.marks.em) : false;
 
@@ -240,81 +250,18 @@ const Toolbar = ({ view, editorState }: { view: EditorView | null, editorState: 
         <button className="icon-btn"><AlignCenter size={16} /></button>
         <button className="icon-btn"><AlignRight size={16} /></button>
       </div>
+      <div className="toolbar-divider" />
+      <div className="toolbar-group">
+        <button 
+          className="icon-btn" 
+          onClick={insertQuestionBlock} 
+          title="Insert Locked Question"
+          style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', width: 'auto' }}
+        >
+          <HelpCircle size={16} /> Insert Question
+        </button>
+      </div>
     </div>
-  );
-};
-
-// --- PushPin Chat Thread Component ---
-type ChatMessage = {
-  id: string;
-  author: string;
-  text: string;
-  timestamp: number;
-};
-
-const ChatDrawer = ({ docUrl }: { docUrl: AutomergeUrl }) => {
-  const [doc, changeDoc] = useDocument<{ messages?: ChatMessage[] }>(docUrl);
-  const [inputVal, setInputVal] = useState('');
-  
-  // Stable random user identity for chat messages
-  const myName = useRef(`User ${Math.floor(Math.random() * 1000)}`).current;
-
-  const messages = doc?.messages || [];
-
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputVal.trim()) return;
-
-    const newMessage: ChatMessage = {
-      id: Math.random().toString(36).substring(2, 9),
-      author: myName,
-      text: inputVal.trim(),
-      timestamp: Date.now(),
-    };
-
-    changeDoc((d) => {
-      if (!d.messages) d.messages = [];
-      d.messages.push(newMessage);
-    });
-
-    setInputVal('');
-  };
-
-  return (
-    <aside className="chat-drawer">
-      <div className="chat-header">
-        <span className="font-semibold">Document Discussion</span>
-      </div>
-      <div className="chat-messages">
-        {messages.length === 0 ? (
-          <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>
-            No comments yet. Start the conversation!
-          </div>
-        ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className="chat-bubble">
-              <div className="chat-meta">
-                <span className="chat-author">{msg.author}</span>
-                <span className="chat-time">
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-              <div className="chat-text">{msg.text}</div>
-            </div>
-          ))
-        )}
-      </div>
-      <form onSubmit={handleSendMessage} className="chat-input-row">
-        <input 
-          type="text" 
-          className="chat-input" 
-          placeholder="Add a comment..." 
-          value={inputVal}
-          onChange={(e) => setInputVal(e.target.value)}
-        />
-        <button type="submit" className="icon-btn chat-send-btn"><Send size={14} /></button>
-      </form>
-    </aside>
   );
 };
 
@@ -348,7 +295,7 @@ const Sidebar = ({
   }, [selectedDocUrl, changeRootDoc]);
 
   const handleNewDocument = () => {
-    const newDoc = repo.create({ text: "", title: "Untitled document", messages: [] });
+    const newDoc = repo.create({ text: "", title: "Untitled document" });
     changeRootDoc(d => {
       if (!d.documents) d.documents = [];
       d.documents.push(newDoc.url);
@@ -430,7 +377,6 @@ const cursorPlugin = () => new Plugin({
   }
 });
 
-
 const ProseMirrorEditor = ({ 
   docUrl, 
   onViewCreated,
@@ -441,8 +387,6 @@ const ProseMirrorEditor = ({
   onStateChange: (state: EditorState) => void;
 }) => {
   const editorRoot = useRef<HTMLDivElement>(null);
-  
-  // Use useDocHandle which correctly manages the async handle lifecycle
   const handle = useDocHandle<{ text: string }>(docUrl);
   const [loaded, setLoaded] = useState(false);
 
@@ -450,17 +394,36 @@ const ProseMirrorEditor = ({
   const myColor = useRef(['#ff5722', '#4caf50', '#2196f3', '#e91e63', '#9c27b0'][Math.floor(Math.random() * 5)]).current;
   const myName = useRef(`User ${Math.floor(Math.random() * 1000)}`).current;
 
+  // Safe promise handling block
   useEffect(() => {
-    if (handle) {
-      handle.whenReady().then(() => {
-        if (handle.docSync() != null) setLoaded(true);
-      });
-    }
+    if (!handle) return;
+    handle.whenReady().then(() => {
+      setLoaded(true);
+    });
   }, [handle]);
 
   useEffect(() => {
     if (!editorRoot.current || !loaded || !handle) return;
     const { pmDoc, schema, plugin } = init(handle, ["text"]);
+
+    // Locked Question Plugin
+    const lockedQuestionPlugin = new Plugin({
+      key: new PluginKey('lockedQuestion'),
+      props: {
+        decorations(state) {
+          const decos: Decoration[] = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name === 'blockquote') {
+              decos.push(Decoration.node(pos, pos + node.nodeSize, {
+                contenteditable: 'false',
+                class: 'locked-question-block'
+              }));
+            }
+          });
+          return DecorationSet.create(state.doc, decos);
+        }
+      }
+    });
 
     const state = EditorState.create({
       schema,
@@ -470,7 +433,8 @@ const ProseMirrorEditor = ({
         keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
         keymap(baseKeymap),
         plugin,
-        cursorPlugin()
+        cursorPlugin(),
+        lockedQuestionPlugin // Injected here
       ]
     });
 
@@ -516,11 +480,9 @@ const ProseMirrorEditor = ({
   return <div ref={editorRoot} className="prosemirror-mount" />;
 };
 
-
 export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
   
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
@@ -540,8 +502,6 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
       <Header 
         title={title} 
         onTitleChange={handleTitleChange} 
-        onToggleChat={() => setChatOpen(!chatOpen)} 
-        chatOpen={chatOpen}
         selectedDocUrl={selectedDocUrl}
       />
       <Toolbar view={editorView} editorState={editorState} />
@@ -567,8 +527,6 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
             )}
           </div>
         </section>
-        {/* Render chat drawer if a document is selected and chat is toggled open */}
-        {selectedDocUrl && chatOpen && <ChatDrawer docUrl={selectedDocUrl} />}
       </main>
     </div>
   );
