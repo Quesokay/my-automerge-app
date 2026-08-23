@@ -3,7 +3,7 @@ import {
   Star, Share, Search, 
   Undo, Redo, Printer, Bold, Italic, Underline, 
   AlignLeft, AlignCenter, AlignRight, FileText, HelpCircle,
-  History, MessageSquare // <-- Added MessageSquare
+  History, MessageSquare, Trash2
 } from 'lucide-react';
 
 // ProseMirror Imports
@@ -325,10 +325,21 @@ const DocumentTitle = ({ docUrl }: { docUrl: AutomergeUrl }) => {
   return <span>{doc?.title || "Untitled document"}</span>;
 };
 
-const Sidebar = ({ rootDocUrl, selectedDocUrl, onSelect }: { rootDocUrl: AutomergeUrl, selectedDocUrl: AutomergeUrl | null, onSelect: (url: AutomergeUrl) => void }) => {
+const Sidebar = ({ 
+  rootDocUrl, 
+  selectedDocUrl, 
+  onSelect 
+}: { 
+  rootDocUrl: AutomergeUrl, 
+  selectedDocUrl: AutomergeUrl | null, 
+  onSelect: (url: string) => void 
+}) => {
   const repo = useRepo();
   const [rootDoc, changeRootDoc] = useDocument<RootDocument>(rootDocUrl);
   const documents = rootDoc?.documents || [];
+  
+  // NEW: State to control the visibility and target of our custom modal
+  const [docToDelete, setDocToDelete] = useState<AutomergeUrl | null>(null);
 
   useEffect(() => {
     if (selectedDocUrl) {
@@ -348,26 +359,106 @@ const Sidebar = ({ rootDocUrl, selectedDocUrl, onSelect }: { rootDocUrl: Automer
     onSelect(newDoc.url);
   };
 
+  // 1. Opens the modal instead of firing window.confirm
+  const handleDeleteClick = (e: React.MouseEvent, url: AutomergeUrl) => {
+    e.stopPropagation();
+    setDocToDelete(url);
+  };
+
+  // 2. Executes the actual deletion when "Delete" is clicked in the modal
+  const confirmDelete = () => {
+    if (!docToDelete) return;
+    
+    changeRootDoc(d => {
+      if (d.documents) {
+        const index = d.documents.indexOf(docToDelete);
+        if (index > -1) {
+          d.documents.splice(index, 1);
+        }
+      }
+    });
+    
+    if (selectedDocUrl === docToDelete) {
+      onSelect(""); 
+    }
+    
+    setDocToDelete(null); // Close the modal
+  };
+
   return (
-    <aside className="docs-sidebar">
-      <div className="sidebar-header">
-        <span className="font-semibold">My Documents</span>
-        <button className="icon-btn" onClick={handleNewDocument}>+</button>
-      </div>
-      <div className="sidebar-content">
-        <div className="outline-list">
-          {documents.map(url => (
-            <div 
-              key={url} 
-              className={`outline-item ${url === selectedDocUrl ? 'active' : ''}`}
-              onClick={() => onSelect(url as AutomergeUrl)}
-            >
-              📄 <DocumentTitle docUrl={url as AutomergeUrl} />
-            </div>
-          ))}
+    <>
+      <aside className="docs-sidebar">
+        <div className="sidebar-header">
+          <span className="font-semibold">My Documents</span>
+          <button className="icon-btn" onClick={handleNewDocument}>+</button>
         </div>
-      </div>
-    </aside>
+        <div className="sidebar-content">
+          <div className="outline-list">
+            {documents.map(url => (
+              <div 
+                key={url} 
+                className={`outline-item ${url === selectedDocUrl ? 'active' : ''}`}
+                onClick={() => onSelect(url as string)}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingRight: '8px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                  <span>📄</span>
+                  <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <DocumentTitle docUrl={url as AutomergeUrl} />
+                  </div>
+                </div>
+                
+                <button
+                  onClick={(e) => handleDeleteClick(e, url as AutomergeUrl)}
+                  title="Delete Document"
+                  style={{ 
+                    background: 'transparent', 
+                    border: 'none', 
+                    cursor: 'pointer', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    opacity: 0.5,
+                    padding: '4px'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                  onMouseLeave={(e) => e.currentTarget.style.opacity = '0.5'}
+                >
+                  <Trash2 size={14} color="#ea4335" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      {/* NEW: Custom Delete Confirmation Modal */}
+      {docToDelete && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ backgroundColor: 'white', padding: '24px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '16px', width: '300px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+            <label style={{ fontWeight: 600, fontSize: '14px', color: '#202124' }}>
+              Are you sure you want to delete this document?
+            </label>
+            <div style={{ fontSize: '13px', color: '#5f6368', marginTop: '-8px' }}>
+              This action will remove it from your list.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+              <button 
+                onClick={() => setDocToDelete(null)} 
+                style={{ padding: '6px 12px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#5f6368', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDelete} 
+                style={{ padding: '6px 12px', border: 'none', background: '#ea4335', color: 'white', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 
