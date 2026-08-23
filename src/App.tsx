@@ -23,31 +23,36 @@ import { goOffline, goOnline } from './main';
 
 import './App.css';
 
-const HistoryDrawer = ({ docUrl, onClose }: { docUrl: AutomergeUrl, onClose: () => void }) => {
+const HistoryDrawer = ({ 
+  docUrl, 
+  onClose,
+  selectedVersion,
+  onSelectVersion
+}: { 
+  docUrl: AutomergeUrl; 
+  onClose: () => void;
+  selectedVersion: string | null;
+  onSelectVersion: (hash: string) => void;
+}) => {
   const [doc] = useDocument(docUrl);
 
-  // Extract and decode the actual Automerge change history
   const history = useMemo(() => {
     if (!doc) return [];
     try {
       const changes = A.getAllChanges(doc);
-      
       return changes.map((changeBytes, index) => {
         const decoded = A.decodeChange(changeBytes);
         return {
           id: decoded.hash || `change-${index}`,
-          // Automerge times are standard JS timestamps (ms since epoch)
           time: new Date(decoded.time).toLocaleString([], { 
             month: 'short', day: 'numeric', 
             hour: '2-digit', minute: '2-digit', second: '2-digit' 
           }),
-          // Actor IDs are long hex strings, so we truncate them for UI readability
           author: `User ${decoded.actor.substring(0, 5)}`,
           message: decoded.message || (index === 0 ? "Created document" : "Edited document")
         };
-      }).reverse(); // Reverse so the newest changes are at the top
+      }).reverse();
     } catch (e) {
-      console.error("Failed to decode history", e);
       return [];
     }
   }, [doc]);
@@ -63,7 +68,17 @@ const HistoryDrawer = ({ docUrl, onClose }: { docUrl: AutomergeUrl, onClose: () 
           <div className="text-muted text-sm" style={{ padding: '16px', textAlign: 'center' }}>No history found.</div>
         ) : (
           history.map(item => (
-            <div key={item.id} style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-bg)'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+            <div 
+              key={item.id} 
+              onClick={() => onSelectVersion(item.id)}
+              style={{ 
+                padding: '12px', 
+                borderBottom: '1px solid var(--border-color)', 
+                cursor: 'pointer', 
+                transition: 'background 0.2s',
+                backgroundColor: selectedVersion === item.id ? 'var(--active-bg)' : 'transparent'
+              }} 
+            >
               <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-color)' }}>{item.time}</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                 <span className="text-muted text-sm">{item.author}</span>
@@ -552,21 +567,59 @@ const ProseMirrorEditor = ({
 export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  
-  // NEW: History state
   const [historyOpen, setHistoryOpen] = useState(false);
   
+  // --- Time Travel States ---
+  const [timeTravelUrl, setTimeTravelUrl] = useState<AutomergeUrl | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  
+  const repo = useRepo();
   const [hash, setHash] = useHash();
   const cleanHash = hash.slice(1);
   const selectedDocUrl = cleanHash && isValidAutomergeUrl(cleanHash) 
     ? (cleanHash as AutomergeUrl) 
     : null;
 
+  // We need direct access to the handle to view historical states
+  const handle = useDocHandle(selectedDocUrl ?? undefined);
   const [doc, changeDoc] = useDocument<{ title?: string, text: string }>(selectedDocUrl || "" as AutomergeUrl);
+  
   const title = doc?.title || "Untitled document";
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (selectedDocUrl) changeDoc((d) => { d.title = e.target.value; });
+    if (selectedDocUrl && !selectedVersion) changeDoc((d) => { d.title = e.target.value; });
+  };
+
+  // --- The Time Machine Logic ---
+  const handleTimeTravel = (versionHash: string) => {
+    const currentDoc = handle?.doc();
+    if (!currentDoc) return;
+
+    try {
+      // 1. Ask Automerge to rewind the document to this exact moment in time
+      const oldDoc = A.view(currentDoc, [versionHash]);
+      
+      // 2. Strip the CRDT metadata to create a clean JSON snapshot of the text
+      const snapshot = JSON.parse(JSON.stringify(oldDoc));
+
+      if (snapshot.text && typeof snapshot.text === 'string') {
+        snapshot.text = snapshot.text.replace(/\uFFFC/g, ''); 
+      }
+      
+      // 3. Create a temporary, un-synced document in the repo to hold this snapshot
+      const tempHandle = repo.create(snapshot);
+      
+      // 4. Point our editor to the temporary document
+      setTimeTravelUrl(tempHandle.url);
+      setSelectedVersion(versionHash);
+    } catch (e) {
+      console.error("Failed to travel back in time:", e);
+    }
+  };
+
+  const exitTimeTravel = () => {
+    setTimeTravelUrl(null);
+    setSelectedVersion(null);
   };
 
   return (
@@ -579,32 +632,61 @@ export default function App({ rootDocUrl }: { rootDocUrl: AutomergeUrl }) {
         onToggleHistory={() => setHistoryOpen(!historyOpen)}
       />
       <Toolbar view={editorView} editorState={editorState} />
+      
       <main className="main-workspace" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <Sidebar 
           rootDocUrl={rootDocUrl} 
           selectedDocUrl={selectedDocUrl} 
-          onSelect={(url) => setHash(url)} 
+          onSelect={(url) => { setHash(url); exitTimeTravel(); }} 
         />
-        <section className="editor-container" style={{ flex: 1, overflowY: 'auto' }}>
-          <div className="document-page">
-            {selectedDocUrl ? (
-              <ProseMirrorEditor 
-                key={selectedDocUrl} 
-                docUrl={selectedDocUrl} 
-                onViewCreated={setEditorView}
-                onStateChange={setEditorState}
-              />
-            ) : (
-              <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
-                Select or create a document to begin editing.
-              </div>
-            )}
-          </div>
-        </section>
         
-        {/* NEW: Render History Drawer when toggled */}
+        {/* NEW: Wrapper to stack the banner and editor vertically */}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+          
+          {/* Time Travel Warning Banner */}
+          {selectedVersion && (
+            <div style={{ backgroundColor: '#fef7e0', padding: '12px 24px', borderBottom: '1px solid #f2c75c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+              <span style={{ color: '#b06000', fontWeight: 600, fontSize: '14px' }}>
+                Viewing a historical version of this document.
+              </span>
+              <button 
+                onClick={exitTimeTravel} 
+                style={{ background: '#b06000', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}
+              >
+                Return to Current
+              </button>
+            </div>
+          )}
+
+          {/* The original editor container takes the remaining height */}
+          <section className="editor-container" style={{ flex: 1, overflowY: 'auto' }}>
+            <div className="document-page">
+              {selectedDocUrl ? (
+                <div style={selectedVersion ? { pointerEvents: 'none', opacity: 0.7, filter: 'grayscale(20%)' } : {}}>
+                  <ProseMirrorEditor 
+                    key={timeTravelUrl || selectedDocUrl} 
+                    docUrl={timeTravelUrl || selectedDocUrl} 
+                    onViewCreated={setEditorView}
+                    onStateChange={setEditorState}
+                  />
+                </div>
+              ) : (
+                <div className="text-muted" style={{ textAlign: 'center', marginTop: '100px' }}>
+                  Select or create a document to begin editing.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+        
+        {/* Version History Sidebar */}
         {selectedDocUrl && historyOpen && (
-          <HistoryDrawer docUrl={selectedDocUrl} onClose={() => setHistoryOpen(false)} />
+          <HistoryDrawer 
+            docUrl={selectedDocUrl} 
+            onClose={() => setHistoryOpen(false)} 
+            selectedVersion={selectedVersion}
+            onSelectVersion={handleTimeTravel}
+          />
         )}
       </main>
     </div>
