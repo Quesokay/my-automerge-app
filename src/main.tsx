@@ -13,7 +13,7 @@ import { MeshAdapter } from "./MeshAdapter"
 export const repo = new Repo({
   storage: new IndexedDBStorageAdapter("automerge-final"),
   network: [
-    new MeshAdapter("ws://localhost:3031"),
+    new MeshAdapter("wss://https://my-automerge-app.fly.dev/"),
     new BroadcastChannelNetworkAdapter(),
   ],
 })

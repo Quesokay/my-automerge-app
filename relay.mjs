@@ -2,7 +2,11 @@ import { WebSocketServer } from 'ws';
 import Hyperswarm from 'hyperswarm';
 import crypto from 'crypto';
 
-const wss = new WebSocketServer({ port: 3031 });
+// Use Fly.io's environment port if available, otherwise fallback to 3031
+const PORT = process.env.PORT || 3031;
+
+// Bind to 0.0.0.0 so the Fly edge proxy can route external traffic to this container
+const wss = new WebSocketServer({ port: PORT, host: '0.0.0.0' });
 const swarm = new Hyperswarm();
 const topic = crypto.createHash('sha256').update('automerge-global-lobby-v1').digest();
 const peers = new Set();
@@ -15,7 +19,6 @@ swarm.on('connection', (conn) => {
   console.log(`New P2P connection established. Total peers: ${peers.size}`);
   
   conn.on('data', data => {
-    // FIX 1: Pass the raw buffer, do NOT use .toString()
     wss.clients.forEach(ws => ws.send(data)); 
   });
   
@@ -24,9 +27,8 @@ swarm.on('connection', (conn) => {
 });
 
 wss.on('connection', (ws) => {
-  console.log('Local React app connected to Relay.');
+  console.log('React app connected to Relay.');
   
-  // FIX 2: Check if the incoming message is binary or text, and preserve it
   ws.on('message', (msg, isBinary) => {
     wss.clients.forEach(client => {
       if (client !== ws && client.readyState === 1) {
@@ -40,4 +42,4 @@ wss.on('connection', (ws) => {
   });
 });
 
-console.log('WebSocket Relay running on ws://localhost:3031');
+console.log(`WebSocket Relay running on port ${PORT}`);
