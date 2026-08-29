@@ -1,12 +1,22 @@
 import { WebSocketServer } from 'ws';
 import Hyperswarm from 'hyperswarm';
 import crypto from 'crypto';
+import http from 'http';
 
-// Use Fly.io's environment port if available, otherwise fallback to 3031
 const PORT = process.env.PORT || 8080;
 
-// Bind to 0.0.0.0 so the Fly edge proxy can route external traffic to this container
-const wss = new WebSocketServer({ port: PORT, host: '0.0.0.0' });
+// 1. Create a raw HTTP server and force it to bind to 0.0.0.0
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Relay is healthy\n');
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP Server bound to 0.0.0.0:${PORT}`);
+});
+
+// 2. Attach the WebSocket server to the running HTTP server
+const wss = new WebSocketServer({ server });
 const swarm = new Hyperswarm();
 const topic = crypto.createHash('sha256').update('automerge-global-lobby-v1').digest();
 const peers = new Set();
@@ -41,5 +51,3 @@ wss.on('connection', (ws) => {
     }
   });
 });
-
-console.log(`WebSocket Relay running on port ${PORT}`);
