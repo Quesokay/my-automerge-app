@@ -3,7 +3,7 @@ import Hyperswarm from 'hyperswarm';
 import crypto from 'crypto';
 
 // Use Fly.io's environment port if available, otherwise fallback to 3031
-const PORT = process.env.PORT || 3031;
+const PORT = process.env.PORT || 8080;
 
 // Bind to 0.0.0.0 so the Fly edge proxy can route external traffic to this container
 const wss = new WebSocketServer({ port: PORT, host: '0.0.0.0' });
