@@ -1,22 +1,21 @@
 import { Repo } from "@automerge/automerge-repo"
 import { BroadcastChannelNetworkAdapter } from "@automerge/automerge-repo-network-broadcastchannel"
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb"
+import { BrowserWebSocketClientAdapter } from "@automerge/automerge-repo-network-websocket";
 import { RepoContext } from "@automerge/automerge-repo-react-hooks"
 import React from "react"
 import ReactDOM from "react-dom/client"
 import App from "./App.tsx"
 import "./index.css"
 import { getOrCreateRoot } from "./rootDoc"
-import { MeshAdapter } from "./MeshAdapter"
-
 
 export const repo = new Repo({
   storage: new IndexedDBStorageAdapter("automerge-final"),
   network: [
-    new MeshAdapter("wss://my-automerge-app.fly.dev"),
+    new BrowserWebSocketClientAdapter("wss://my-automerge-app.fly.dev"),
     new BroadcastChannelNetworkAdapter(),
   ],
-})
+});
 
 export const goOffline = () => { console.log("Offline mode") }
 export const goOnline = () => { console.log("Online mode") }
