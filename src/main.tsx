@@ -9,16 +9,23 @@ import App from "./App.tsx"
 import "./index.css"
 import { getOrCreateRoot } from "./rootDoc"
 
+// Isolate the adapter so goOnline/goOffline toggles work
+const wsAdapter = new BrowserWebSocketClientAdapter("wss://my-automerge-app.fly.dev/sync");
+
 export const repo = new Repo({
   storage: new IndexedDBStorageAdapter("automerge-final"),
-  network: [
-    new BrowserWebSocketClientAdapter("wss://my-automerge-app.fly.dev"),
-    new BroadcastChannelNetworkAdapter(),
-  ],
+  network: [wsAdapter, new BroadcastChannelNetworkAdapter()],
 });
 
-export const goOffline = () => { console.log("Offline mode") }
-export const goOnline = () => { console.log("Online mode") }
+export const goOffline = () => { 
+  wsAdapter.disconnect();
+  console.log("Severed WSS connection. Working strictly local."); 
+}
+
+export const goOnline = () => { 
+  wsAdapter.connect(repo.networkSubsystem.peerId);
+  console.log("Reconnected to WSS relay. Syncing changes..."); 
+}
 
 const rootDocUrl = getOrCreateRoot(repo)
 
