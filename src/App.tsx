@@ -347,7 +347,7 @@ const LobbyDrawer = ({
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const ws = new WebSocket('wss://my-automerge-app.fly.dev');
+    const ws = new WebSocket('wss://my-automerge-app.fly.dev/lobby');
     wsRef.current = ws;
     
     ws.onopen = () => {
